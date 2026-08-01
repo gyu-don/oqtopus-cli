@@ -80,3 +80,4 @@ _oqtopus()
 }
 complete -F _oqtopus oqtopus
 --- stderr ---
+--- end ---

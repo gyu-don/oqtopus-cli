@@ -6,7 +6,6 @@ exit: 0
 --- stdout ---
 Created backend environment: <TEST_ROOT>/work/demo
 --- stderr ---
-
 --- filesystem ---
 demo/
 demo/.metadata
@@ -39,3 +38,4 @@ API_URL=http://demo.example.test
 mode = "fixture"
 --- demo/compose.yaml ---
 name: characterization
+--- end ---

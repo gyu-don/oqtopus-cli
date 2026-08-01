@@ -19,6 +19,10 @@ use fake_tool::FakeTools;
 
 const TEST_VERSION: &str = "9.8.7-characterization";
 
+/// Terminates every snapshot. insta trims trailing whitespace, so without a
+/// closing line the final section's trailing newline would go unrecorded.
+const END_SENTINEL: &str = "--- end ---\n";
+
 struct TestContext {
     binary: PathBuf,
     invoke_with_bash: bool,
@@ -114,7 +118,10 @@ impl TestContext {
             .env("NO_PROXY", "127.0.0.1,localhost")
             .env("no_proxy", "127.0.0.1,localhost")
             .envs(self.fake_tools.env())
-            .envs(extra_env);
+            .envs(extra_env)
+            // The CLI is expected never to prompt. Closing stdin turns a future
+            // interactive read into an immediate EOF instead of a 20s timeout.
+            .stdin(Stdio::null());
         let output = output_with_timeout(command, Duration::from_secs(20))
             .assert()
             .code(expected_code)
@@ -187,7 +194,7 @@ fn render_output(output: &Output, sandbox: &Path) -> String {
         .code()
         .map_or_else(|| "<SIGNAL>".to_owned(), |code| code.to_string());
 
-    format!("exit: {exit_code}\n--- stdout ---\n{stdout}--- stderr ---\n{stderr}")
+    format!("exit: {exit_code}\n--- stdout ---\n{stdout}--- stderr ---\n{stderr}{END_SENTINEL}")
 }
 
 fn normalize(value: &str, sandbox: &Path) -> String {
@@ -261,8 +268,13 @@ fn render_observation(
 ) -> String {
     let sandbox = context.sandbox.path();
     let work = context.work_dir();
+    // Splice the extra sections in ahead of the sentinel so it stays last, and
+    // so no separator is inserted that would mask stderr's trailing newline.
+    let body = command_output
+        .strip_suffix(END_SENTINEL)
+        .expect("command output is terminated by the end sentinel");
     format!(
-        "{command_output}\n--- filesystem ---\n{}--- selected files ---\n{}",
+        "{body}--- filesystem ---\n{}--- selected files ---\n{}{END_SENTINEL}",
         render_tree(&work),
         render_selected_files(&work, selected_files, sandbox)
     )

@@ -6,3 +6,4 @@ exit: 1
 --- stdout ---
 --- stderr ---
 Error: unknown cloud-local command: unknown
+--- end ---

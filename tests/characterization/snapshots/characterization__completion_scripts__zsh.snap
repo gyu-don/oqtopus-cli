@@ -49,3 +49,4 @@ _oqtopus() {
 
 _oqtopus "$@"
 --- stderr ---
+--- end ---

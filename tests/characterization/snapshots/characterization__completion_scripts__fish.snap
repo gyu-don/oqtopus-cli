@@ -18,3 +18,4 @@ complete -c oqtopus -f -n "__fish_seen_subcommand_from cloud-local" -a "versions
 complete -c oqtopus -f -n "__fish_seen_subcommand_from cloud-local; and __fish_seen_subcommand_from install uninstall update versions" -a "cloud frontend admin all help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from cloud-local; and __fish_seen_subcommand_from start stop restart" -a "db user provider admin user_signup worker all --foreground help --help"
 --- stderr ---
+--- end ---
