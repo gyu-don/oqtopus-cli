@@ -1,0 +1,18 @@
+---
+source: tests/characterization/main.rs
+expression: "render_observation(&context, &output, &[\".metadata\"])"
+---
+exit: 0
+--- stdout ---
+Removed <TEST_ROOT>/work/tranqu
+--- stderr ---
+--- filesystem ---
+.metadata
+--- selected files ---
+--- .metadata ---
+template=backend
+install_root=<TEST_ROOT>/xdg-data/oqtopus/backend/releases
+env_name=demo
+env_root=<TEST_ROOT>/work
+created_at=2031-12-13T14:15:16Z
+--- end ---

@@ -99,7 +99,9 @@ impl TestContext {
         // The checked-in Bash script deliberately does not need an executable bit.
         // An explicitly configured candidate is treated as a native executable.
         let mut command = if self.invoke_with_bash {
-            let mut command = Command::new("bash");
+            // Absolute path on purpose: a test may replace PATH outright to make
+            // a command genuinely absent, and that must not hide the interpreter.
+            let mut command = Command::new(bash_program());
             command.arg(&self.binary);
             command
         } else {
@@ -184,6 +186,19 @@ fn output_with_timeout(mut command: Command, timeout: Duration) -> Output {
     }
 }
 
+/// Resolves `bash` against the ambient PATH once, before any test narrows the
+/// PATH handed to the CLI.
+fn bash_program() -> &'static Path {
+    static BASH: OnceLock<PathBuf> = OnceLock::new();
+    BASH.get_or_init(|| {
+        let path = env::var_os("PATH").expect("PATH is required to locate bash");
+        env::split_paths(&path)
+            .map(|directory| directory.join("bash"))
+            .find(|candidate| candidate.is_file())
+            .expect("bash was not found on PATH")
+    })
+}
+
 fn test_binary() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let configured = env::var_os("OQTOPUS_TEST_BIN")
@@ -212,6 +227,7 @@ fn render_output(output: &Output, sandbox: &Path) -> String {
 
 fn normalize(value: &str, sandbox: &Path) -> String {
     static TEMP_PATH: OnceLock<Regex> = OnceLock::new();
+    static BUILD_ARG_ID: OnceLock<Regex> = OnceLock::new();
 
     let normalized_newlines = value.replace("\r\n", "\n");
     let binary = test_binary().display().to_string();
@@ -219,10 +235,16 @@ fn normalize(value: &str, sandbox: &Path) -> String {
         .replace(&binary, "<TEST_BIN>")
         .replace(&sandbox.display().to_string(), "<TEST_ROOT>")
         .replace(env!("CARGO_MANIFEST_DIR"), "<REPO_ROOT>");
-
-    TEMP_PATH
+    let normalized_temp_paths = TEMP_PATH
         .get_or_init(|| Regex::new(r#"<TEST_ROOT>/tmp/[^/\s\"]+"#).unwrap())
-        .replace_all(&normalized_paths, "<TEST_ROOT>/tmp/<TEMP_DIR>")
+        .replace_all(&normalized_paths, "<TEST_ROOT>/tmp/<TEMP_DIR>");
+
+    // build_sse_runtime passes id -u and id -g through to docker. Those differ
+    // per machine and per CI runner image, so the values cannot be recorded;
+    // that they are passed at all is the part that matters.
+    BUILD_ARG_ID
+        .get_or_init(|| Regex::new(r"\b(UID|GID)=\d+\b").unwrap())
+        .replace_all(&normalized_temp_paths, "$1=<ID>")
         .into_owned()
 }
 
@@ -700,4 +722,283 @@ fn init_backend_creates_rendered_environment() {
             ],
         )
     );
+}
+
+#[test]
+fn backend_info_reports_metadata_verbatim() {
+    let context = TestContext::new();
+    EnvFixture::backend(&context, &[]);
+
+    let output = context.run(["backend", "info"], 0);
+
+    insta::assert_snapshot!("backend_info__metadata", output);
+}
+
+#[test]
+fn backend_environment_validation_errors() {
+    // No `.metadata` at all.
+    {
+        let context = TestContext::new();
+        let output = context.run(["backend", "info"], 1);
+        insta::assert_snapshot!("backend_env__no_metadata", output);
+    }
+
+    // `.metadata` exists but belongs to a different template.
+    {
+        let context = TestContext::new();
+        let work = context.work_dir();
+        fs::create_dir_all(&work).expect("create work dir");
+        fs::write(
+            work.join(".metadata"),
+            format!(
+                "template=cloud-local\nenv_root={}\ninstall_root={}\n",
+                work.display(),
+                context
+                    .root()
+                    .join("xdg-data/oqtopus/backend/releases")
+                    .display(),
+            ),
+        )
+        .expect("write .metadata");
+        let output = context.run(["backend", "info"], 1);
+        insta::assert_snapshot!("backend_env__wrong_template", output);
+    }
+
+    // `template=backend` and a correct `env_root`, but no `install_root`.
+    {
+        let context = TestContext::new();
+        let work = context.work_dir();
+        fs::create_dir_all(&work).expect("create work dir");
+        fs::write(
+            work.join(".metadata"),
+            format!("template=backend\nenv_root={}\n", work.display()),
+        )
+        .expect("write .metadata");
+        let output = context.run(["backend", "info"], 1);
+        insta::assert_snapshot!("backend_env__missing_install_root", output);
+    }
+
+    // `env_root` in `.metadata` does not match the current directory.
+    {
+        let context = TestContext::new();
+        let work = context.work_dir();
+        fs::create_dir_all(&work).expect("create work dir");
+        let mismatched_env_root = context.root().join("elsewhere");
+        fs::write(
+            work.join(".metadata"),
+            format!(
+                "template=backend\ninstall_root={}\nenv_root={}\n",
+                context
+                    .root()
+                    .join("xdg-data/oqtopus/backend/releases")
+                    .display(),
+                mismatched_env_root.display(),
+            ),
+        )
+        .expect("write .metadata");
+        let output = context.run(["backend", "info"], 1);
+        insta::assert_snapshot!("backend_env__env_root_mismatch", output);
+    }
+}
+
+#[test]
+fn backend_versions_ignores_unusable_metadata() {
+    let context = TestContext::new();
+    let work = context.work_dir();
+    fs::create_dir_all(&work).expect("create work dir");
+    // Wrong template: `try_load_backend_env` must reject this silently rather
+    // than warn, since "versions" works fine outside any environment too.
+    fs::write(
+        work.join(".metadata"),
+        format!("template=cloud-local\nenv_root={}\n", work.display()),
+    )
+    .expect("write .metadata");
+    context
+        .fake_tools
+        .fixture("curl")
+        .stdout(r#"[{"name":"v1.2.3"},{"name":"v2.0.0"}]"#);
+
+    let output = context.run(["backend", "versions", "engine"], 0);
+
+    insta::assert_snapshot!("backend_versions__unusable_metadata", output);
+}
+
+#[test]
+fn metadata_get_uses_the_first_match_and_keeps_inner_separators() {
+    let tags = r#"[{"name":"v1.2.3"},{"name":"v2.0.0"}]"#;
+
+    // Two `engine_version` lines in `.metadata`: the first one must win.
+    {
+        let context = TestContext::new();
+        EnvFixture::backend(
+            &context,
+            &[("engine_version", "v1.2.3"), ("engine_version", "v2.0.0")],
+        );
+        context.fake_tools.fixture("curl").stdout(tags);
+
+        let output = context.run(["backend", "versions", "engine"], 0);
+
+        insta::assert_snapshot!("metadata_get__duplicate_key", output);
+    }
+
+    // A value that itself contains `=`: everything after the first `=` on the
+    // line is the value.
+    {
+        let context = TestContext::new();
+        EnvFixture::backend(&context, &[("engine_version", "branch:a=b")]);
+        context.fake_tools.fixture("curl").stdout(tags);
+
+        let output = context.run(["backend", "versions", "engine"], 0);
+
+        insta::assert_snapshot!("metadata_get__value_contains_separator", output);
+    }
+}
+
+#[test]
+fn backend_install_branch_writes_metadata_binding() {
+    let context = TestContext::new();
+    EnvFixture::backend(&context, &[]);
+    context.fake_tools.fixture("git");
+    context.fake_tools.fixture("uv");
+
+    let output = context.run(["backend", "install", "tranqu", "branch:main"], 0);
+
+    if context.invoke_with_bash {
+        insta::assert_snapshot!(
+            "bash_external_calls__backend_install_branch",
+            normalize(&context.fake_tools.log(), context.root())
+        );
+    }
+
+    insta::assert_snapshot!(
+        "backend_install__branch_binding",
+        render_observation(&context, &output, &[".metadata"])
+    );
+}
+
+#[test]
+fn backend_uninstall_branch_clears_metadata_binding() {
+    let context = TestContext::new();
+    EnvFixture::backend(&context, &[("tranqu_version", "branch:main")]);
+    fs::create_dir_all(context.work_dir().join("tranqu")).expect("create tranqu branch checkout");
+
+    let output = context.run(["backend", "uninstall", "tranqu", "branch:main"], 0);
+
+    insta::assert_snapshot!(
+        "backend_uninstall__branch_binding",
+        render_observation(&context, &output, &[".metadata"])
+    );
+}
+
+/// Lays out a backend environment with an installed `engine` release ready
+/// for `backend build sse-runtime`, and writes `config/.env` with `contents`.
+fn setup_sse_runtime_build(context: &TestContext, env_dot_env_contents: &str) {
+    let env = EnvFixture::backend(context, &[("engine_version", "v1.2.3")]);
+    let release = env.install_release("engine-v1.2.3");
+    for project in ["core", "combiner", "estimator", "mitigator"] {
+        fs::create_dir_all(release.join(project).join(".venv"))
+            .unwrap_or_else(|error| panic!("create {project}/.venv: {error}"));
+    }
+    fs::create_dir_all(release.join("sse_runtime")).expect("create sse_runtime dir");
+    fs::write(
+        release.join("sse_runtime").join("Dockerfile"),
+        "FROM scratch\n",
+    )
+    .expect("write sse_runtime Dockerfile");
+
+    let config_dir = context.work_dir().join("config");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(config_dir.join(".env"), env_dot_env_contents).expect("write config/.env");
+
+    context.fake_tools.fixture("docker");
+}
+
+#[test]
+fn sse_runtime_build_reads_the_env_config() {
+    let success_cases = [
+        ("double_quoted", "SSE_CONTAINER_IMAGE=\"img:1\"\n"),
+        ("single_quoted", "SSE_CONTAINER_IMAGE='img:2'\n"),
+        ("value_contains_separator", "SSE_CONTAINER_IMAGE=a=b=c\n"),
+        (
+            "after_comments",
+            "# SSE_CONTAINER_IMAGE=ignored\n   # indented comment\n\nSSE_CONTAINER_IMAGE=img:5\n",
+        ),
+        ("empty_value", "SSE_CONTAINER_IMAGE=\n"),
+    ];
+    for (name, contents) in success_cases {
+        let context = TestContext::new();
+        setup_sse_runtime_build(&context, contents);
+
+        let output = context.run(["backend", "build", "sse-runtime"], 0);
+        assert!(output.starts_with("exit: 0\n"), "{output}");
+
+        if context.invoke_with_bash {
+            insta::assert_snapshot!(
+                format!("sse_build__{name}"),
+                normalize(&context.fake_tools.log(), context.root())
+            );
+        }
+    }
+
+    let error_cases = [
+        ("key_missing", "OTHER=x\n"),
+        ("key_indented", "   SSE_CONTAINER_IMAGE=img:4\n"),
+    ];
+    for (name, contents) in error_cases {
+        let context = TestContext::new();
+        setup_sse_runtime_build(&context, contents);
+
+        let output = context.run(["backend", "build", "sse-runtime"], 1);
+
+        insta::assert_snapshot!(format!("sse_build__{name}"), output);
+    }
+}
+
+#[test]
+fn need_command_reports_missing_dependencies() {
+    // `curl` itself is absent from PATH.
+    {
+        let context = TestContext::new();
+        let empty_path = context.root().join("no-tools");
+        fs::create_dir_all(&empty_path).expect("create empty PATH directory");
+
+        let output = context.run_with_env(
+            ["backend", "versions", "engine"],
+            1,
+            [("PATH", empty_path.as_os_str())],
+        );
+
+        insta::assert_snapshot!("need_command__curl_missing", output);
+    }
+
+    // `curl` is present (the fake tool) but `jq` is not.
+    {
+        let context = TestContext::new();
+
+        let output = context.run_with_env(
+            ["backend", "versions", "engine"],
+            1,
+            [("PATH", context.fake_tools.bin_dir().as_os_str())],
+        );
+
+        insta::assert_snapshot!("need_command__jq_missing", output);
+    }
+}
+
+#[test]
+fn init_validates_env_name_boundaries() {
+    for (snapshot_name, env_name) in [
+        ("env_name__leading_hyphen", "-lead"),
+        ("env_name__leading_dot", ".lead"),
+        ("env_name__leading_underscore", "_lead"),
+        ("env_name__uppercase", "UPPER"),
+        ("env_name__space", "a b"),
+        ("env_name__slash", "a/b"),
+        ("env_name__single_digit", "0"),
+        ("env_name__punctuation_tail", "a.b-c_d"),
+    ] {
+        let context = TestContext::new();
+        let output = context.run(["init", env_name, "--template", "nonexistent"], 1);
+        insta::assert_snapshot!(snapshot_name, output);
+    }
 }

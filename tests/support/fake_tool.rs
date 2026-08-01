@@ -43,6 +43,12 @@ impl FakeTools {
         }
     }
 
+    /// The directory holding the fake executables. Usable as a PATH on its own
+    /// when a test needs every other command to be absent.
+    pub fn bin_dir(&self) -> &Path {
+        &self.bin
+    }
+
     /// Prefixes the fake tools to an existing PATH value.
     pub fn path_with(&self, existing: impl AsRef<OsStr>) -> OsString {
         let mut paths = vec![self.bin.clone()];

@@ -1,0 +1,9 @@
+---
+source: tests/characterization/main.rs
+expression: output
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: invalid environment template. Found template='cloud-local', but 'oqtopus backend' requires template='backend'.
+--- end ---
