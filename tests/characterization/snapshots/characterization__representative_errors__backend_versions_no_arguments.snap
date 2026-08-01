@@ -1,0 +1,10 @@
+---
+source: tests/characterization/main.rs
+expression: "context.run(args, 1)"
+---
+exit: 1
+--- stdout ---
+Usage:
+  oqtopus backend versions <engine|tranqu|gateway>
+--- stderr ---
+--- end ---

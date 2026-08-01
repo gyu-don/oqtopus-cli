@@ -1,0 +1,13 @@
+---
+source: tests/characterization/main.rs
+expression: "context.run(args, 1)"
+---
+exit: 1
+--- stdout ---
+Usage:
+  oqtopus init <env_name> --template backend
+  oqtopus init <env_name> --template cloud-local
+
+Creates a local OQTOPUS environment from the official template.
+--- stderr ---
+--- end ---

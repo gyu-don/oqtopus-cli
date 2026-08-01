@@ -374,12 +374,58 @@ fn representative_errors() {
             "backend_status_outside_environment",
             vec!["backend", "status"],
         ),
+        ("init_no_arguments", vec!["init"]),
+        ("init_missing_template_flag", vec!["init", "demo"]),
+        (
+            "init_template_flag_without_value",
+            vec!["init", "demo", "--template"],
+        ),
+        (
+            "init_extra_argument",
+            vec!["init", "demo", "--template", "backend", "extra"],
+        ),
+        ("backend_versions_no_arguments", vec!["backend", "versions"]),
+        (
+            "backend_versions_extra_argument",
+            vec!["backend", "versions", "engine", "extra"],
+        ),
+        ("completion_no_arguments", vec!["completion"]),
+        (
+            "completion_extra_argument",
+            vec!["completion", "bash", "zsh"],
+        ),
+        (
+            "backend_status_extra_argument",
+            vec!["backend", "status", "extra"],
+        ),
+        (
+            "backend_info_extra_argument",
+            vec!["backend", "info", "extra"],
+        ),
     ] {
         let context = TestContext::new();
         insta::assert_snapshot!(
             format!("representative_errors__{name}"),
             context.run(args, 1)
         );
+    }
+}
+
+#[test]
+fn init_rejects_invalid_requests_without_side_effects() {
+    for (name, args) in [
+        (
+            "init_rejects__invalid_env_name",
+            vec!["init", "Bad_Name", "--template", "backend"],
+        ),
+        (
+            "init_rejects__unknown_template",
+            vec!["init", "demo", "--template", "nonexistent"],
+        ),
+    ] {
+        let context = TestContext::new();
+        let output = context.run(args, 1);
+        insta::assert_snapshot!(name, render_observation(&context, &output, &[]));
     }
 }
 
