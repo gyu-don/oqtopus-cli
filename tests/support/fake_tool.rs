@@ -1,10 +1,8 @@
 //! Test-facing setup and fixture helpers for `oqtopus-test-fake`.
 
-#![allow(dead_code)]
-
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 const TOOLS: &[&str] = &["curl", "date", "docker", "git", "uv"];
 
@@ -75,13 +73,6 @@ impl FakeTools {
         Fixture::new(self.fixtures.join(tool))
     }
 
-    /// Configures the response for the one-based `ordinal` call to `tool`.
-    pub fn fixture_call(&self, tool: &str, ordinal: u64) -> Fixture {
-        assert!(ordinal > 0, "fake tool call ordinals are one-based");
-        self.assert_tool(tool);
-        Fixture::new(self.fixtures.join(tool).join(ordinal.to_string()))
-    }
-
     pub fn log(&self) -> String {
         match fs::read_to_string(&self.log) {
             Ok(value) => value,
@@ -120,41 +111,6 @@ impl Fixture {
 
     pub fn stdout(self, value: impl AsRef<[u8]>) -> Self {
         self.write("stdout", value);
-        self
-    }
-
-    pub fn stderr(self, value: impl AsRef<[u8]>) -> Self {
-        self.write("stderr", value);
-        self
-    }
-
-    pub fn status(self, value: u8) -> Self {
-        self.write("status", value.to_string());
-        self
-    }
-
-    /// Prevents built-in curl/git/uv filesystem effects for this response.
-    pub fn no_default_effects(self) -> Self {
-        self.write("no-default-effects", []);
-        self
-    }
-
-    /// Adds a file to copy into the command cwd after a successful call.
-    pub fn effect_file(self, relative: impl AsRef<Path>, value: impl AsRef<[u8]>) -> Self {
-        let relative = relative.as_ref();
-        assert!(
-            !relative.as_os_str().is_empty()
-                && relative
-                    .components()
-                    .all(|part| matches!(part, Component::Normal(_))),
-            "fake tool effect path must be a safe relative path: {}",
-            relative.display()
-        );
-        let path = self.path.join("effects").join(relative);
-        fs::create_dir_all(path.parent().expect("effect file has parent"))
-            .expect("create fake tool effect parent");
-        fs::write(&path, value)
-            .unwrap_or_else(|error| panic!("write fake tool effect {}: {error}", path.display()));
         self
     }
 

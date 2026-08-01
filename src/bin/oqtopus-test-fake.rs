@@ -6,14 +6,18 @@
 
 use std::env;
 use std::ffi::OsStr;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process;
-use std::thread;
-use std::time::{Duration, Instant};
 
 const SUPPORTED_TOOLS: &[&str] = &["curl", "date", "docker", "git", "uv"];
+const RECORDED_ENV_KEYS: &[&str] = &[
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "OQTOPUS_CLI_VERSION",
+];
 
 fn main() {
     if let Err(error) = run() {
@@ -36,7 +40,7 @@ fn run() -> Result<(), String> {
     let state_root = confined_target(&sandbox, &state_root, &sandbox)?;
     let cwd = confined_target(&cwd, Path::new("."), &sandbox)?;
     let ordinal = next_ordinal(&tool, Some(&state_root))?;
-    let fixture = fixture_dir(Some(&fixture_root), &tool, ordinal).ok_or_else(|| {
+    let fixture = fixture_dir(Some(&fixture_root), &tool).ok_or_else(|| {
         format!("no fixture configured for {tool} call {ordinal}; refusing to succeed implicitly")
     })?;
 
@@ -56,28 +60,14 @@ fn run() -> Result<(), String> {
     }
 
     if status == 0 {
-        if !has_fixture_marker(Some(&fixture), "no-default-effects") {
-            apply_default_effects(&tool, args, stdout.as_deref(), &cwd, &sandbox)?;
-        }
-        let dir = fixture.join("effects");
-        if dir.is_dir() {
-            copy_effects(&dir, &cwd)?;
-        }
+        apply_default_effects(&tool, args, stdout.as_deref(), &cwd, &sandbox)?;
     }
 
-    if tool != "curl" || curl_output_path(args).is_none() {
-        match stdout {
-            Some(bytes) => io::stdout()
-                .write_all(&bytes)
-                .map_err(|error| format!("write stdout: {error}"))?,
-            None if tool == "date" && status == 0 => {
-                let value = env::var("OQTOPUS_TEST_FAKE_DATE")
-                    .unwrap_or_else(|_| "2025-01-02T03:04:05Z".to_owned());
-                writeln!(io::stdout(), "{value}")
-                    .map_err(|error| format!("write date: {error}"))?;
-            }
-            None => {}
-        }
+    let suppress_stdout = tool == "curl" && curl_output_path(args).is_some();
+    if let Some(bytes) = stdout.filter(|_| !suppress_stdout) {
+        io::stdout()
+            .write_all(&bytes)
+            .map_err(|error| format!("write stdout: {error}"))?;
     }
 
     process::exit(status);
@@ -120,7 +110,6 @@ fn next_ordinal(tool: &str, state_root: Option<&Path>) -> Result<u64, String> {
         return Ok(1);
     };
     fs::create_dir_all(root).map_err(|error| format!("create state directory: {error}"))?;
-    let _lock = LockFile::acquire(&root.join(format!(".{tool}.count.lock")))?;
     let path = root.join(format!("{tool}.count"));
     let previous = match fs::read_to_string(&path) {
         Ok(value) => value
@@ -131,20 +120,15 @@ fn next_ordinal(tool: &str, state_root: Option<&Path>) -> Result<u64, String> {
         Err(error) => return Err(format!("read {}: {error}", path.display())),
     };
     let ordinal = previous + 1;
-    let temporary = root.join(format!(".{tool}.count.{}.tmp", process::id()));
-    fs::write(&temporary, format!("{ordinal}\n"))
-        .map_err(|error| format!("write {}: {error}", temporary.display()))?;
-    fs::rename(&temporary, &path).map_err(|error| format!("update {}: {error}", path.display()))?;
+    fs::write(&path, format!("{ordinal}\n"))
+        .map_err(|error| format!("write {}: {error}", path.display()))?;
     Ok(ordinal)
 }
 
-fn fixture_dir(root: Option<&Path>, tool: &str, ordinal: u64) -> Option<PathBuf> {
+fn fixture_dir(root: Option<&Path>, tool: &str) -> Option<PathBuf> {
     let root = root?;
     let tool_dir = root.join(tool);
-    let call_dir = tool_dir.join(ordinal.to_string());
-    if call_dir.is_dir() {
-        Some(call_dir)
-    } else if tool_dir.is_dir() {
+    if tool_dir.is_dir() {
         Some(tool_dir)
     } else {
         None
@@ -177,10 +161,6 @@ fn read_status(fixture: Option<&Path>) -> Result<i32, String> {
     } else {
         Err(format!("status must be between 0 and 255, got {status}"))
     }
-}
-
-fn has_fixture_marker(fixture: Option<&Path>, name: &str) -> bool {
-    fixture.is_some_and(|dir| dir.join(name).is_file())
 }
 
 fn apply_default_effects(
@@ -278,39 +258,6 @@ fn option_value<'a>(args: &'a [String], option: &str) -> Option<&'a str> {
         })
 }
 
-fn copy_effects(source: &Path, destination: &Path) -> Result<(), String> {
-    for entry in
-        fs::read_dir(source).map_err(|error| format!("read {}: {error}", source.display()))?
-    {
-        let entry = entry.map_err(|error| format!("read effect entry: {error}"))?;
-        let name = entry.file_name();
-        let target = destination.join(&name);
-        let kind = entry
-            .file_type()
-            .map_err(|error| format!("read effect type: {error}"))?;
-        if kind.is_dir() {
-            fs::create_dir_all(&target).map_err(|error| {
-                format!("create effect directory {}: {error}", target.display())
-            })?;
-            copy_effects(&entry.path(), &target)?;
-        } else if kind.is_file() {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|error| {
-                    format!("create effect parent {}: {error}", parent.display())
-                })?;
-            }
-            fs::copy(entry.path(), &target)
-                .map_err(|error| format!("copy effect to {}: {error}", target.display()))?;
-        } else {
-            return Err(format!(
-                "effect {} is not a regular file or directory",
-                entry.path().display()
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn append_log(
     path: &Path,
     tool: &str,
@@ -322,93 +269,47 @@ fn append_log(
         fs::create_dir_all(parent)
             .map_err(|error| format!("create log directory {}: {error}", parent.display()))?;
     }
-    let _lock = LockFile::acquire(&path.with_extension("lock"))?;
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push(tool.to_owned());
+    argv.extend(args.iter().cloned());
+
+    let mut line = String::new();
+    line.push_str(&format!(
+        "{{\"tool\":{},\"ordinal\":{},\"argv\":[",
+        json_string(tool),
+        ordinal
+    ));
+    for (index, arg) in argv.iter().enumerate() {
+        if index != 0 {
+            line.push(',');
+        }
+        line.push_str(&json_string(arg));
+    }
+    line.push_str(&format!(
+        "],\"cwd\":{},\"env\":{{",
+        json_string(&cwd.to_string_lossy())
+    ));
+    for (index, key) in RECORDED_ENV_KEYS.iter().enumerate() {
+        if index != 0 {
+            line.push(',');
+        }
+        line.push_str(&json_string(key));
+        line.push(':');
+        match env::var_os(key) {
+            Some(value) => line.push_str(&json_string(&value.to_string_lossy())),
+            None => line.push_str("null"),
+        }
+    }
+    line.push_str("}}\n");
+
     let mut log = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|error| format!("open log {}: {error}", path.display()))?;
-    let mut argv = Vec::with_capacity(args.len() + 1);
-    argv.push(tool.to_owned());
-    argv.extend(args.iter().cloned());
-    write!(
-        log,
-        "{{\"tool\":{},\"ordinal\":{},\"argv\":[",
-        json_string(tool),
-        ordinal
-    )
-    .map_err(log_error)?;
-    for (index, arg) in argv.iter().enumerate() {
-        if index != 0 {
-            write!(log, ",").map_err(log_error)?;
-        }
-        write!(log, "{}", json_string(arg)).map_err(log_error)?;
-    }
-    write!(
-        log,
-        "],\"cwd\":{},\"env\":{{",
-        json_string(&cwd.to_string_lossy())
-    )
-    .map_err(log_error)?;
-    for (index, key) in recorded_env_keys().iter().enumerate() {
-        if index != 0 {
-            write!(log, ",").map_err(log_error)?;
-        }
-        write!(log, "{}:", json_string(key)).map_err(log_error)?;
-        match env::var_os(key) {
-            Some(value) => {
-                write!(log, "{}", json_string(&value.to_string_lossy())).map_err(log_error)?
-            }
-            None => write!(log, "null").map_err(log_error)?,
-        }
-    }
-    writeln!(log, "}}}}").map_err(log_error)?;
+    log.write_all(line.as_bytes())
+        .map_err(|error| format!("write log {}: {error}", path.display()))?;
     Ok(())
-}
-
-struct LockFile {
-    path: PathBuf,
-    file: Option<File>,
-}
-
-impl LockFile {
-    fn acquire(path: &Path) -> Result<Self, String> {
-        let started = Instant::now();
-        loop {
-            match OpenOptions::new().write(true).create_new(true).open(path) {
-                Ok(file) => {
-                    return Ok(Self {
-                        path: path.to_path_buf(),
-                        file: Some(file),
-                    });
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    if started.elapsed() >= Duration::from_secs(5) {
-                        return Err(format!("timed out waiting for lock {}", path.display()));
-                    }
-                    thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => return Err(format!("create lock {}: {error}", path.display())),
-            }
-        }
-    }
-}
-
-impl Drop for LockFile {
-    fn drop(&mut self) {
-        drop(self.file.take());
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn recorded_env_keys() -> Vec<String> {
-    env::var("OQTOPUS_TEST_FAKE_RECORD_ENV")
-        .unwrap_or_else(|_| "HOME,XDG_CONFIG_HOME,XDG_DATA_HOME,OQTOPUS_CLI_VERSION".to_owned())
-        .split(',')
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(str::to_owned)
-        .collect()
 }
 
 fn json_string(value: &str) -> String {
@@ -429,10 +330,6 @@ fn json_string(value: &str) -> String {
     }
     encoded.push('"');
     encoded
-}
-
-fn log_error(error: io::Error) -> String {
-    format!("write fake log: {error}")
 }
 
 #[cfg(test)]

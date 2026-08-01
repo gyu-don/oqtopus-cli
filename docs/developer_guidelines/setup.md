@@ -85,22 +85,13 @@ OQTOPUS_TEST_BIN="/absolute/path/to/rust-oqtopus" \
 Use an absolute path so tests continue to find the executable after changing into a
 temporary fixture directory.
 
-Side-effect cases expose implementation-neutral test seams for a future native Rust
-HTTP client and clock. A candidate should prefer the loopback endpoints when present,
-fall back to the corresponding fixture file when sockets are unavailable, and use the
-fixed timestamp:
-
-| Environment variable | Test contract |
-| --- | --- |
-| `OQTOPUS_GITHUB_API_BASE_URL` | Base URL for GitHub API requests |
-| `OQTOPUS_GITHUB_BASE_URL` | Base URL for GitHub archive downloads |
-| `OQTOPUS_TEST_GITHUB_TAGS_FIXTURE` | Tags JSON fallback fixture path |
-| `OQTOPUS_TEST_TEMPLATE_ARCHIVE_FIXTURE` | Template archive fallback fixture path |
-| `OQTOPUS_TEST_NOW` | Fixed RFC 3339 current time |
-
-These variables are supplied by the harness. They are compatibility seams for black-box
-tests, not user configuration. The shared snapshots contain only exit status, output,
-and filesystem state; Bash-specific `curl` and `date` argv are recorded separately.
+External commands the CLI shells out to (`curl`, `date`, `docker`, `git`, and `uv`) are
+replaced by fake executables on `PATH` during tests. Each fake tool call is matched
+against a configured fixture; a call with no fixture configured fails immediately with
+exit code 125, so a test can never succeed implicitly by falling through to a real
+external command. The shared snapshots capture exit status, stdout, stderr, the
+resulting file tree, and the contents of selected files; the Bash-specific argv passed
+to the fake tools is recorded and snapshotted separately.
 
 ### Updating Snapshots
 

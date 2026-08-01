@@ -9,16 +9,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use assert_cmd::assert::OutputAssertExt;
-use regex::{Captures, Regex};
+use regex::Regex;
 use tempfile::TempDir;
 
 #[path = "../support/fake_tool.rs"]
 mod fake_tool;
-#[path = "../support/http_fixture.rs"]
-mod http_fixture;
 
 use fake_tool::FakeTools;
-use http_fixture::HttpFixtureServer;
 
 const TEST_VERSION: &str = "9.8.7-characterization";
 
@@ -194,9 +191,6 @@ fn render_output(output: &Output, sandbox: &Path) -> String {
 }
 
 fn normalize(value: &str, sandbox: &Path) -> String {
-    static PID: OnceLock<Regex> = OnceLock::new();
-    static RFC3339: OnceLock<Regex> = OnceLock::new();
-    static DATE_TIME: OnceLock<Regex> = OnceLock::new();
     static TEMP_PATH: OnceLock<Regex> = OnceLock::new();
 
     let normalized_newlines = value.replace("\r\n", "\n");
@@ -205,24 +199,10 @@ fn normalize(value: &str, sandbox: &Path) -> String {
         .replace(&binary, "<TEST_BIN>")
         .replace(&sandbox.display().to_string(), "<TEST_ROOT>")
         .replace(env!("CARGO_MANIFEST_DIR"), "<REPO_ROOT>");
-    let normalized_temp_paths = TEMP_PATH
-        .get_or_init(|| Regex::new(r#"<TEST_ROOT>/tmp/[^/\s\"]+"#).unwrap())
-        .replace_all(&normalized_paths, "<TEST_ROOT>/tmp/<TEMP_DIR>");
-    let normalized_pids = PID
-        .get_or_init(|| Regex::new(r"(?i)\b(pid\s*[=:]?\s*)\d+\b").unwrap())
-        .replace_all(&normalized_temp_paths, |captures: &Captures<'_>| {
-            format!("{}<PID>", &captures[1])
-        });
-    let normalized_rfc3339 = RFC3339
-        .get_or_init(|| {
-            Regex::new(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b")
-                .unwrap()
-        })
-        .replace_all(&normalized_pids, "<TIMESTAMP>");
 
-    DATE_TIME
-        .get_or_init(|| Regex::new(r"\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\b").unwrap())
-        .replace_all(&normalized_rfc3339, "<TIMESTAMP>")
+    TEMP_PATH
+        .get_or_init(|| Regex::new(r#"<TEST_ROOT>/tmp/[^/\s\"]+"#).unwrap())
+        .replace_all(&normalized_paths, "<TEST_ROOT>/tmp/<TEMP_DIR>")
         .into_owned()
 }
 
@@ -394,7 +374,6 @@ fn representative_errors() {
 #[test]
 fn backend_versions_filters_and_sorts_stable_semver_tags() {
     let context = TestContext::new();
-    let server = HttpFixtureServer::new();
     let tags = r#"[
   {"name":"v1.2.3"},
   {"name":"v2.0.0-rc.1"},
@@ -407,24 +386,12 @@ fn backend_versions_filters_and_sorts_stable_semver_tags() {
   {"name":"release-v4.0.0"}
 ]"#;
     context.fake_tools.fixture("curl").stdout(tags);
-    let tags_fixture = context.sandbox.path().join("github-tags.json");
-    fs::write(&tags_fixture, tags).expect("write implementation-neutral tags fixture");
-    server.respond(
-        "/repos/oqtopus-team/oqtopus-engine/tags?per_page=100",
-        "application/json",
-        tags,
-    );
 
-    let mut extra_env = vec![("OQTOPUS_TEST_GITHUB_TAGS_FIXTURE", tags_fixture.as_os_str())];
-    if let Some(base_url) = server.base_url() {
-        extra_env.push(("OQTOPUS_GITHUB_API_BASE_URL", OsStr::new(base_url)));
-    }
-    let output = context.run_with_env(["backend", "versions", "engine"], 0, extra_env);
+    let output = context.run(["backend", "versions", "engine"], 0);
 
     if context.invoke_with_bash {
         assert_eq!(context.fake_tools.call_count("curl"), 1);
         assert_eq!(context.fake_tools.call_count("date"), 0);
-        assert_eq!(server.request_count(), 0);
         insta::assert_snapshot!(
             "bash_external_calls__backend_versions",
             normalize(&context.fake_tools.log(), context.sandbox.path())
@@ -440,38 +407,18 @@ fn backend_versions_filters_and_sorts_stable_semver_tags() {
 #[test]
 fn init_backend_creates_rendered_environment() {
     let context = TestContext::new();
-    let server = HttpFixtureServer::new();
     let archive = build_backend_template_archive(context.sandbox.path());
-    let archive_fixture = context.sandbox.path().join("template-archive.tar.gz");
-    fs::write(&archive_fixture, &archive)
-        .expect("write implementation-neutral template archive fixture");
     context.fake_tools.fixture("curl").stdout(&archive);
-    server.respond(
-        "/oqtopus-team/oqtopus-cli/archive/refs/heads/main.tar.gz",
-        "application/gzip",
-        &archive,
-    );
     context
         .fake_tools
         .fixture("date")
         .stdout("2031-12-13T14:15:16Z\n");
 
-    let mut extra_env = vec![
-        (
-            "OQTOPUS_TEST_TEMPLATE_ARCHIVE_FIXTURE",
-            archive_fixture.as_os_str(),
-        ),
-        ("OQTOPUS_TEST_NOW", OsStr::new("2031-12-13T14:15:16Z")),
-    ];
-    if let Some(base_url) = server.base_url() {
-        extra_env.push(("OQTOPUS_GITHUB_BASE_URL", OsStr::new(base_url)));
-    }
-    let output = context.run_with_env(["init", "demo", "--template", "backend"], 0, extra_env);
+    let output = context.run(["init", "demo", "--template", "backend"], 0);
 
     if context.invoke_with_bash {
         assert_eq!(context.fake_tools.call_count("curl"), 1);
         assert_eq!(context.fake_tools.call_count("date"), 1);
-        assert_eq!(server.request_count(), 0);
         insta::assert_snapshot!(
             "bash_external_calls__init_backend",
             normalize(&context.fake_tools.log(), context.sandbox.path())
