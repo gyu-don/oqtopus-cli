@@ -230,6 +230,20 @@ fn confined_target(cwd: &Path, requested: &Path, sandbox: &Path) -> Result<PathB
             }
             Component::Normal(part) => normalized.push(part),
         }
+        // Resolving `..` lexically says nothing about where a symlink points, so
+        // the prefix check below would accept `<sandbox>/link/out` while the write
+        // lands wherever `link` points. The fakes have no reason to follow a
+        // symlink, so reject one anywhere on the path rather than resolving it.
+        // This also keeps the `..` handling above honest: with no symlinks on the
+        // path, a lexical parent is the physical parent.
+        if fs::symlink_metadata(&normalized).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err(format!(
+                "target traverses the symlink {}: {}",
+                normalized.display(),
+                requested.display()
+            ));
+        }
     }
     if normalized.starts_with(sandbox) {
         Ok(normalized)
@@ -362,5 +376,30 @@ mod tests {
         );
         assert!(confined_target(&cwd, Path::new("../../outside"), sandbox).is_err());
         assert!(confined_target(&cwd, Path::new("/tmp/outside"), sandbox).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_target_rejects_paths_that_traverse_a_symlink() {
+        // The cases above are lexical, so they pass even without touching the
+        // filesystem. A symlink escape needs real directories: the path stays
+        // inside the sandbox as a string while the write lands outside it.
+        let root = tempfile::tempdir().expect("create temporary directory");
+        let root = std::fs::canonicalize(root.path()).expect("resolve temporary directory");
+        let sandbox = root.join("sandbox");
+        let cwd = sandbox.join("work");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&cwd).expect("create sandbox work directory");
+        std::fs::create_dir_all(&outside).expect("create directory outside the sandbox");
+        std::os::unix::fs::symlink(&outside, cwd.join("escape")).expect("create escaping symlink");
+
+        // Writing *through* the symlink, and naming the symlink itself.
+        assert!(confined_target(&cwd, Path::new("escape/result"), &sandbox).is_err());
+        assert!(confined_target(&cwd, Path::new("escape"), &sandbox).is_err());
+        // A sibling path that does not touch the symlink is still allowed.
+        assert_eq!(
+            confined_target(&cwd, Path::new("nested/output"), &sandbox).unwrap(),
+            cwd.join("nested/output")
+        );
     }
 }
