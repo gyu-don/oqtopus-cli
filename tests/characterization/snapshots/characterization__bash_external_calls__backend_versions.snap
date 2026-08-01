@@ -1,0 +1,5 @@
+---
+source: tests/characterization/main.rs
+expression: "normalize(&context.fake_tools.log(), context.sandbox.path())"
+---
+{"tool":"curl","ordinal":1,"argv":["curl","-fsSL","https://api.github.com/repos/oqtopus-team/oqtopus-engine/tags?per_page=100"],"cwd":"<TEST_ROOT>/work","env":{"HOME":"<TEST_ROOT>/home","XDG_CONFIG_HOME":"<TEST_ROOT>/xdg-config","XDG_DATA_HOME":"<TEST_ROOT>/xdg-data","OQTOPUS_CLI_VERSION":"9.8.7-characterization"}}

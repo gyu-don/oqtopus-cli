@@ -1,0 +1,64 @@
+name: Bash characterization tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bash-characterization:
+    name: Bash (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+
+      - name: Compile characterization tests
+        run: cargo test --locked --test characterization --no-run
+
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Lint Rust targets
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Guard external commands
+        shell: bash
+        run: |
+          guard_dir="$RUNNER_TEMP/oqtopus-test-guards"
+          mkdir -p "$guard_dir"
+          for command in curl docker git uv wget; do
+            printf '%s\n' \
+              '#!/usr/bin/env bash' \
+              'echo "error: characterization test attempted a real external command" >&2' \
+              'exit 125' > "$guard_dir/$command"
+            chmod +x "$guard_dir/$command"
+          done
+          echo "$guard_dir" >> "$GITHUB_PATH"
+
+      - name: Test production Bash CLI and fake tools
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: make test

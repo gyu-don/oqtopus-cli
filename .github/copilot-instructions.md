@@ -2,14 +2,16 @@
 
 ## Repository Overview
 
-**oqtopus-cli** is a Bash-based command line interface for setting up and operating a local [OQTOPUS](https://github.com/oqtopus-team) backend environment. The primary deliverable is a single executable shell script (`bin/oqtopus`) that users install system-wide. This repository is **documentation-first**: the source code lives in `bin/oqtopus` and `scripts/install.sh`, and the rest of the repository is MkDocs documentation published to [oqtopus-cli.readthedocs.io](https://oqtopus-cli.readthedocs.io/).
+**oqtopus-cli** is a Bash-based command line interface for setting up and operating a local [OQTOPUS](https://github.com/oqtopus-team) backend environment. The primary deliverable is a single executable shell script (`bin/oqtopus`) that users install system-wide. Rust code provides a characterization test harness and fake external tools; it is not part of the installed CLI. The MkDocs documentation is published to [oqtopus-cli.readthedocs.io](https://oqtopus-cli.readthedocs.io/).
 
 ## Repository Structure
 
 ```text
 oqtopus-cli/
-├── bin/oqtopus              # Main CLI script (single Bash file, ~1000 LOC)
+├── bin/oqtopus              # Main CLI script (single Bash file, ~2200 LOC)
 ├── scripts/install.sh       # Installer script (downloads bin/oqtopus to ~/.local/bin)
+├── src/bin/                 # Rust test-only fake external command
+├── tests/characterization/  # Rust characterization tests and snapshots
 ├── templates/backend/       # Config/template files copied on `oqtopus init`
 │   └── config/              # Per-component YAML config and logging config files
 ├── docs/                    # MkDocs documentation sources (Markdown)
@@ -17,6 +19,8 @@ oqtopus-cli/
 │   ├── usage/               # End-user guides
 │   └── developer_guidelines/ # Contributor guides
 ├── pyproject.toml           # Python project (docs tooling only, no Python runtime code)
+├── Cargo.toml               # Rust characterization test package
+├── Cargo.lock               # Locked Rust test dependencies
 ├── mkdocs.yml               # MkDocs site configuration
 ├── Makefile                 # Developer workflow commands
 ├── .python-version          # Pins Python version (3.13)
@@ -35,11 +39,12 @@ oqtopus-cli/
 | Layer | Technology |
 |---|---|
 | CLI runtime | Bash (`set -euo pipefail`), targeting Linux and macOS |
+| Characterization tests | Rust stable + `insta`, targeting Linux and macOS |
 | Docs tooling | Python ≥ 3.13, managed by [uv](https://docs.astral.sh/uv/) ≥ 0.10 |
 | Docs framework | MkDocs + Material theme |
 | Doc linting | `pymarkdownlnt` |
 
-There is **no compiled language, no Python runtime code, and no test suite** in this repository. All logic is Bash.
+Production logic is Bash. Rust is used for the characterization test harness; there is no Python runtime code.
 
 ## Development Environment Setup
 
@@ -49,19 +54,21 @@ make install
 # Equivalent to: uv sync --all-groups && git config --local commit.template .gitmessage
 ```
 
-Prerequisites: Python ≥ 3.13, uv ≥ 0.10.
+Prerequisites: Python ≥ 3.13, uv ≥ 0.10, and the stable Rust toolchain.
 
 ## Key Make Targets
 
 | Command | Description |
 |---|---|
 | `make install` | Install Python deps (docs only) and set git commit template |
+| `make test` | Run all Rust tests |
+| `make test-bash` | Run characterization tests against `bin/oqtopus` |
 | `make docs-lint` | Lint all Markdown under `docs/` with `pymarkdownlnt` |
 | `make docs-build` | Build MkDocs HTML site to `site/` |
 | `make docs-serve` | Serve docs locally at http://localhost:8000 |
 | `make help` | Show all available targets |
 
-There are **no test commands** — the repository has no automated test suite.
+The characterization test executable can be selected with `OQTOPUS_TEST_BIN`. It defaults to `bin/oqtopus`; set it to an absolute Rust binary path to compare another implementation. See `docs/developer_guidelines/setup.md` for snapshot update commands.
 
 ## Linting Documentation
 
@@ -149,10 +156,11 @@ All branches are created from and merged back into `main`.
 
 When working on any task, read these files first:
 
-1. `bin/oqtopus` — the entire CLI implementation (~1000 LOC Bash)
+1. `bin/oqtopus` — the entire CLI implementation (~2200 LOC Bash)
 2. `docs/usage/command-reference.md` — authoritative user-facing command reference
-3. `templates/backend/config/` — config templates copied into user environments on `oqtopus init`
-4. `mkdocs.yml` — navigation structure of documentation site
+3. `tests/characterization/main.rs` — observable Bash CLI behavior contract
+4. `templates/backend/config/` — config templates copied into user environments on `oqtopus init`
+5. `mkdocs.yml` — navigation structure of documentation site
 
 ## Backend Components and Services
 
@@ -172,7 +180,7 @@ Stop order: reverse of start order.
 ## Known Errors and Workarounds
 
 - **No Python application code**: `pyproject.toml` exists only for docs tooling. Do not add Python runtime code to this repository.
-- **No test suite**: The repository has no `pytest`, `bats`, or other test framework. Validate Bash changes manually and lint docs with `make docs-lint`.
+- **No real external services in tests**: Characterization tests must fake Docker, network clients, and other external commands. Never point the suite at live services.
 - **uv version pin**: The project uses uv `0.10.9` (`.uv-version`). If uv commands fail, ensure the correct version is installed.
 - **Python version**: Must be Python 3.13. If `uv sync` fails due to version mismatch, check the `.python-version` file.
 - **Markdown linting scope**: `pymarkdownlnt` only scans `docs/` (per `Makefile`). Files outside `docs/` (e.g., `README.md`) are not linted automatically.

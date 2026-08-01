@@ -1,0 +1,8 @@
+---
+source: tests/characterization/main.rs
+expression: "context.run([argument], 0)"
+---
+exit: 0
+--- stdout ---
+oqtopus 9.8.7-characterization
+--- stderr ---

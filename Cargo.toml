@@ -1,0 +1,16 @@
+[package]
+name = "oqtopus-cli"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[[test]]
+name = "characterization"
+path = "tests/characterization/main.rs"
+
+[dev-dependencies]
+assert_cmd = "2"
+insta = "1"
+regex = "1"
+tempfile = "3"

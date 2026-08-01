@@ -2,7 +2,10 @@ SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-.PHONY: install diff-backend-configs docs-lint docs-build docs-serve help
+CARGO ?= cargo
+CHARACTERIZATION_TEST ?= characterization
+
+.PHONY: install test test-bash diff-backend-configs docs-lint docs-build docs-serve help
 
 install: ## Install dependencies and configure git hooks and commit template
 	@uv sync --all-groups
@@ -10,6 +13,13 @@ install: ## Install dependencies and configure git hooks and commit template
 		git config --local commit.template .gitmessage; \
 	fi
 	@chmod +x scripts/diff-backend-configs.sh
+
+test: ## Run all Rust tests (characterization tests use OQTOPUS_TEST_BIN when set)
+	@$(CARGO) test --locked
+
+test-bash: ## Run characterization tests against the production Bash CLI
+	@unset OQTOPUS_TEST_BIN; \
+		$(CARGO) test --locked --test $(CHARACTERIZATION_TEST)
 
 diff-backend-configs: ## Compare backend template configs against upstream repositories
 	@scripts/diff-backend-configs.sh

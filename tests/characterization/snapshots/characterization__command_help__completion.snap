@@ -1,0 +1,9 @@
+---
+source: tests/characterization/main.rs
+expression: "context.run(args, 0)"
+---
+exit: 0
+--- stdout ---
+Usage:
+  oqtopus completion <bash|zsh|fish>
+--- stderr ---

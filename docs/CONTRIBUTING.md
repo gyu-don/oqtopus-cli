@@ -20,7 +20,10 @@ If you have a new feature request, please create an issue following the [Feature
 
 ## Coding Guidelines
 
-For developer information, please refer to the [Developement Flow](./developer_guidelines/development_flow.md).
+For developer information, please refer to the
+[Development Flow](./developer_guidelines/development_flow.md) and
+[Development Environment Setup](./developer_guidelines/setup.md), including the
+characterization test and snapshot review workflow.
 
 ## Commit Message Guidelines
 

@@ -97,6 +97,13 @@ Below is the correspondence between prefixes and labels:
 
 This project uses GitHub Actions to automate checks and repository management.
 
+### Characterization Tests
+
+Pull requests and pushes to `main` run the production Bash CLI characterization suite
+on Ubuntu and macOS. The job pre-fetches locked Rust dependencies, then runs tests with
+Cargo in offline mode and guards real external commands such as Docker and `curl`.
+Test cases must provide fakes for every external interaction they exercise.
+
 ### Labeling
 
 Labels are automatically assigned to pull requests targeting the default
