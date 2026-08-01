@@ -1,0 +1,16 @@
+---
+source: tests/characterization/main.rs
+expression: output
+---
+exit: 0
+--- stdout ---
+engine:
+* branch:feature/x (installed)
+  v3.3.3 (installed, not in remote tags)
+  v2.0.0
+  v1.10.0 (installed)
+  v1.2.3 (installed)
+  v0.9.9
+  vfoo (installed, not in remote tags)
+--- stderr ---
+--- end ---

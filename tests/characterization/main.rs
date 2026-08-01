@@ -26,7 +26,9 @@ const END_SENTINEL: &str = "--- end ---\n";
 struct TestContext {
     binary: PathBuf,
     invoke_with_bash: bool,
-    sandbox: TempDir,
+    // Owns the temporary directory; every path is taken from `root` instead.
+    _sandbox: TempDir,
+    root: PathBuf,
     fake_tools: FakeTools,
 }
 
@@ -40,14 +42,25 @@ impl TestContext {
         );
 
         let sandbox = tempfile::tempdir().expect("create isolated test directory");
-        let fake_tools = FakeTools::new(sandbox.path());
+        // The CLI compares `.metadata`'s env_root against `pwd -P`, and the fake
+        // tools compare their cwd against the sandbox root; both report the
+        // physical path. macOS places temporary directories under /var, which is
+        // a symlink to /private/var, so an unresolved sandbox path would never
+        // compare equal there. Resolve it once, up front.
+        let root = fs::canonicalize(sandbox.path()).expect("resolve the sandbox path");
+        let fake_tools = FakeTools::new(&root);
 
         Self {
             binary,
             invoke_with_bash: env::var_os("OQTOPUS_TEST_BIN").is_none(),
-            sandbox,
+            _sandbox: sandbox,
+            root,
             fake_tools,
         }
+    }
+
+    fn root(&self) -> &Path {
+        &self.root
     }
 
     fn run<I, S>(&self, args: I, expected_code: i32) -> String
@@ -66,7 +79,7 @@ impl TestContext {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        let root = self.sandbox.path();
+        let root = self.root.as_path();
         let home = root.join("home");
         let data = root.join("xdg-data");
         let config = root.join("xdg-config");
@@ -132,7 +145,7 @@ impl TestContext {
     }
 
     fn work_dir(&self) -> PathBuf {
-        self.sandbox.path().join("work")
+        self.root.join("work")
     }
 }
 
@@ -266,7 +279,7 @@ fn render_observation(
     command_output: &str,
     selected_files: &[&str],
 ) -> String {
-    let sandbox = context.sandbox.path();
+    let sandbox = context.root();
     let work = context.work_dir();
     // Splice the extra sections in ahead of the sentinel so it stays last, and
     // so no separator is inserted that would mask stderr's trailing newline.
@@ -278,6 +291,61 @@ fn render_observation(
         render_tree(&work),
         render_selected_files(&work, selected_files, sandbox)
     )
+}
+
+/// The on-disk shape `oqtopus init` leaves behind, built directly.
+///
+/// Commands that run *inside* an environment need one to exist. Producing it
+/// by running `init` first would couple every such test to the template
+/// download, so the layout is written here instead.
+struct EnvFixture {
+    install_root: PathBuf,
+}
+
+impl EnvFixture {
+    /// Writes `.metadata` for a `backend` environment into the work directory.
+    /// `extra` lines are appended in the given order, so a caller can control
+    /// key order and deliberately introduce duplicates.
+    fn backend(context: &TestContext, extra: &[(&str, &str)]) -> Self {
+        Self::create(context, "backend", "backend", extra)
+    }
+
+    fn create(
+        context: &TestContext,
+        template: &str,
+        data_dir: &str,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        let env_root = context.work_dir();
+        // Mirrors data_root()/cloud_local_data_root() under the harness's XDG_DATA_HOME.
+        let install_root = context
+            .root()
+            .join("xdg-data/oqtopus")
+            .join(data_dir)
+            .join("releases");
+        fs::create_dir_all(&env_root).expect("create the environment root");
+        fs::create_dir_all(&install_root).expect("create the install root");
+
+        let mut metadata = format!(
+            "template={template}\ninstall_root={}\nenv_name=demo\nenv_root={}\ncreated_at=2031-12-13T14:15:16Z\n",
+            install_root.display(),
+            env_root.display()
+        );
+        for (key, value) in extra {
+            metadata.push_str(&format!("{key}={value}\n"));
+        }
+        fs::write(env_root.join(".metadata"), metadata).expect("write .metadata");
+
+        Self { install_root }
+    }
+
+    /// Creates `<install_root>/<name>`, as an extracted release would leave it.
+    fn install_release(&self, name: &str) -> PathBuf {
+        let path = self.install_root.join(name);
+        fs::create_dir_all(&path)
+            .unwrap_or_else(|error| panic!("create release {}: {error}", path.display()));
+        path
+    }
 }
 
 fn build_backend_template_archive(root: &Path) -> Vec<u8> {
@@ -496,7 +564,7 @@ fn backend_versions_filters_and_sorts_stable_semver_tags() {
         assert_eq!(context.fake_tools.call_count("date"), 0);
         insta::assert_snapshot!(
             "bash_external_calls__backend_versions",
-            normalize(&context.fake_tools.log(), context.sandbox.path())
+            normalize(&context.fake_tools.log(), context.root())
         );
     }
 
@@ -507,9 +575,101 @@ fn backend_versions_filters_and_sorts_stable_semver_tags() {
 }
 
 #[test]
+fn backend_versions_annotates_environment_context() {
+    let tags = r#"[{"name":"v1.2.3"},{"name":"v2.0.0"},{"name":"v1.10.0"},{"name":"v0.9.9"},{"name":"v2.0.0-rc.1"},{"name":"nightly"}]"#;
+
+    // The current binding is the only difference between the two cases: it moves
+    // the `* ` marker, and a branch binding sorts ahead of every semver tag.
+    for (name, engine_version) in [
+        ("backend_versions__current_release", "v1.10.0"),
+        ("backend_versions__current_branch", "branch:feature/x"),
+    ] {
+        let context = TestContext::new();
+        let env = EnvFixture::backend(&context, &[("engine_version", engine_version)]);
+        for release in [
+            "engine-v1.2.3",
+            "engine-v1.10.0",
+            "engine-v3.3.3",
+            "engine-vfoo",
+            "tranqu-v1.0.0",
+        ] {
+            env.install_release(release);
+        }
+        context.fake_tools.fixture("curl").stdout(tags);
+
+        let output = context.run(["backend", "versions", "engine"], 0);
+        assert_eq!(context.fake_tools.call_count("curl"), 1);
+
+        insta::assert_snapshot!(name, output);
+    }
+}
+
+#[test]
+fn backend_versions_warns_when_tags_are_saturated() {
+    // 100 tags (the GitHub API's per_page=100 cap) with a shared major.minor so
+    // the only thing distinguishing entries is `.patch`. This is deliberately
+    // "adversarial" for a naive lexicographic sort: v1.0.99 < v1.0.9 as strings,
+    // but must sort *after* it numerically. A full descending dump of all 100
+    // versions is the only way to confirm the sort is numeric end-to-end
+    // (e.g. that v1.0.10 lands between v1.0.11 and v1.0.9, not next to v1.0.1).
+    let tags: Vec<String> = (0..100)
+        .map(|patch| format!(r#"{{"name":"v1.0.{patch}"}}"#))
+        .collect();
+    let tags_json = format!("[{}]", tags.join(","));
+
+    let context = TestContext::new();
+    context.fake_tools.fixture("curl").stdout(tags_json);
+
+    let output = context.run(["backend", "versions", "gateway"], 0);
+    assert_eq!(context.fake_tools.call_count("curl"), 1);
+
+    insta::assert_snapshot!("backend_versions_warns_when_tags_are_saturated", output);
+}
+
+#[test]
+fn version_resolves_latest_when_cli_version_is_empty() {
+    // Same saturated-tags fixture as list_component_versions, but exercised
+    // through `resolve_latest_version`, which emits its own distinct pair of
+    // warnings ("latest version resolution" instead of "the version list").
+    let tags: Vec<String> = (0..100)
+        .map(|patch| format!(r#"{{"name":"v1.0.{patch}"}}"#))
+        .collect();
+    let tags_json = format!("[{}]", tags.join(","));
+
+    let context = TestContext::new();
+    context.fake_tools.fixture("curl").stdout(tags_json);
+
+    // OQTOPUS_CLI_VERSION is always set by the harness; override it with the
+    // empty string so `cli_version()` falls through to `resolve_latest_version`.
+    let output = context.run_with_env(["version"], 0, [("OQTOPUS_CLI_VERSION", "")]);
+    assert_eq!(context.fake_tools.call_count("curl"), 1);
+
+    insta::assert_snapshot!("version_resolves_latest_when_cli_version_is_empty", output);
+}
+
+#[test]
+fn backend_versions_rejects_unusable_input() {
+    let context = TestContext::new();
+    context
+        .fake_tools
+        .fixture("curl")
+        .stdout(r#"[{"name":"nightly"}]"#);
+    let output = context.run(["backend", "versions", "tranqu"], 1);
+    assert_eq!(context.fake_tools.call_count("curl"), 1);
+    insta::assert_snapshot!("backend_versions__no_stable_versions", output);
+
+    // `is_in_list` rejects the component before `need_command curl` ever runs,
+    // so no curl fixture is configured here and none must be called.
+    let context = TestContext::new();
+    let output = context.run(["backend", "versions", "bogus"], 1);
+    assert_eq!(context.fake_tools.call_count("curl"), 0);
+    insta::assert_snapshot!("backend_versions__unknown_component", output);
+}
+
+#[test]
 fn init_backend_creates_rendered_environment() {
     let context = TestContext::new();
-    let archive = build_backend_template_archive(context.sandbox.path());
+    let archive = build_backend_template_archive(context.root());
     context.fake_tools.fixture("curl").stdout(&archive);
     context
         .fake_tools
@@ -523,7 +683,7 @@ fn init_backend_creates_rendered_environment() {
         assert_eq!(context.fake_tools.call_count("date"), 1);
         insta::assert_snapshot!(
             "bash_external_calls__init_backend",
-            normalize(&context.fake_tools.log(), context.sandbox.path())
+            normalize(&context.fake_tools.log(), context.root())
         );
     }
 
