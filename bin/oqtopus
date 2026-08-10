@@ -959,7 +959,7 @@ service_command() {
   fi
   [[ -d "$project" ]] || die "cannot start '$service'. Installed release directory not found: $project"
   module=$(service_module "$service")
-  printf '%q ' uv run --project "$project" python -m "$module" -c "$ENV_ROOT/config/$service/config.yaml" -l "$ENV_ROOT/config/$service/logging.yaml"
+  printf '%q ' env -u VIRTUAL_ENV uv run --project "$project" python -m "$module" -c "$ENV_ROOT/config/$service/config.yaml" -l "$ENV_ROOT/config/$service/logging.yaml"
 }
 
 start_service() {
@@ -1563,35 +1563,35 @@ cloud_local_service_command() {
   case "$service" in
     user)
       printf '%q ' \
-        env POWERTOOLS_METRICS_NAMESPACE=user-api POWERTOOLS_SERVICE_NAME=user-api \
+        env -u VIRTUAL_ENV POWERTOOLS_METRICS_NAMESPACE=user-api POWERTOOLS_SERVICE_NAME=user-api \
         uv run --project "$cloud_dir" uvicorn \
         oqtopus_cloud.user.lambda_function:app \
         --host 0.0.0.0 --port "${USER_API_PORT:-8080}" --reload --log-level debug
       ;;
     provider)
       printf '%q ' \
-        env POWERTOOLS_METRICS_NAMESPACE=provider-api POWERTOOLS_SERVICE_NAME=provider-api \
+        env -u VIRTUAL_ENV POWERTOOLS_METRICS_NAMESPACE=provider-api POWERTOOLS_SERVICE_NAME=provider-api \
         uv run --project "$cloud_dir" uvicorn \
         oqtopus_cloud.provider.lambda_function:app \
         --host 0.0.0.0 --port "${PROVIDER_API_PORT:-8888}" --reload --log-level debug
       ;;
     admin)
       printf '%q ' \
-        env POWERTOOLS_METRICS_NAMESPACE=admin-api POWERTOOLS_SERVICE_NAME=admin-api \
+        env -u VIRTUAL_ENV POWERTOOLS_METRICS_NAMESPACE=admin-api POWERTOOLS_SERVICE_NAME=admin-api \
         uv run --project "$cloud_dir" uvicorn \
         oqtopus_cloud.admin.lambda_function:app \
         --host 0.0.0.0 --port "${ADMIN_API_PORT:-8889}" --reload --log-level debug
       ;;
     user_signup)
       printf '%q ' \
-        env POWERTOOLS_METRICS_NAMESPACE=user_signup-api POWERTOOLS_SERVICE_NAME=user_signup-api \
+        env -u VIRTUAL_ENV POWERTOOLS_METRICS_NAMESPACE=user_signup-api POWERTOOLS_SERVICE_NAME=user_signup-api \
         uv run --project "$cloud_dir" uvicorn \
         oqtopus_cloud.user_signup.lambda_function:app \
         --host 0.0.0.0 --port "${USER_SIGNUP_API_PORT:-8890}" --reload --log-level debug
       ;;
     worker)
       printf '%q ' \
-        env POWERTOOLS_METRICS_NAMESPACE=pending-jobs-updater POWERTOOLS_SERVICE_NAME=pending-jobs-updater \
+        env -u VIRTUAL_ENV POWERTOOLS_METRICS_NAMESPACE=pending-jobs-updater POWERTOOLS_SERVICE_NAME=pending-jobs-updater \
         uv run --project "$cloud_dir" python \
         "$cloud_dir/backend/oqtopus_cloud/worker/pending_jobs_updater/local_scheduler.py"
       ;;
@@ -1615,10 +1615,41 @@ cloud_local_start_db() {
   log "Starting db"
   docker compose --project-name "$ENV_NAME" -f "$cloud_dir/backend/compose.yaml" up -d db minio mc \
     || die "failed to start db with docker compose."
+
+  log "Waiting for db to be ready"
+  local db_wait_attempts=0
+  # The probe below is specific to the current backing engine (MySQL); update
+  # it if the compose.yaml db service is ever replaced with a different engine.
+  until docker compose --project-name "$ENV_NAME" -f "$cloud_dir/backend/compose.yaml" \
+      exec -T db mysql -h127.0.0.1 --protocol=tcp -uadmin -ppassword main -e "SELECT 1" >/dev/null 2>&1; do
+    db_wait_attempts=$((db_wait_attempts + 1))
+    if (( db_wait_attempts >= 60 )); then
+      die "timed out waiting for db to become ready."
+    fi
+    sleep 2
+  done
+
+  log "db ready, applying migrations"
+  (
+    cd "$cloud_dir/backend" || exit 1
+    unset VIRTUAL_ENV
+    load_env_exports
+    uv run --project "$cloud_dir" alembic upgrade head
+  ) || die "failed to run alembic upgrade head."
+
+  log "Seeding db"
+  (
+    cd "$cloud_dir/backend" || exit 1
+    unset VIRTUAL_ENV
+    load_env_exports
+    uv run --project "$cloud_dir" python scripts/seed.py
+  ) || die "failed to run scripts/seed.py."
+
   local init_script="$cloud_dir/backend/storage/init_storage.py"
   if [[ -f "$init_script" ]]; then
     (
       cd "$ENV_ROOT"
+      unset VIRTUAL_ENV
       load_env_exports
       uv run --project "$cloud_dir" python "$init_script" \
         || die "failed to run storage/init_storage.py."
