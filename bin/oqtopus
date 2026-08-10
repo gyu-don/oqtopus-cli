@@ -1629,12 +1629,33 @@ cloud_local_start_db() {
     sleep 2
   done
 
+  log "Waiting for db port to be reachable from the host"
+  local host_wait_attempts=0
+  # Guards against port-forwarding lag between the container's internal
+  # readiness (checked above) and host-side reachability (e.g. Docker
+  # Desktop/WSL2 environments), which is what alembic/seed below connect via.
+  until (exec 3<>/dev/tcp/127.0.0.1/3306) 2>/dev/null; do
+    host_wait_attempts=$((host_wait_attempts + 1))
+    if (( host_wait_attempts >= 30 )); then
+      die "timed out waiting for db port 127.0.0.1:3306 to be reachable from the host."
+    fi
+    sleep 1
+  done
+
   log "db ready, applying migrations"
   (
     cd "$cloud_dir/backend" || exit 1
     unset VIRTUAL_ENV
     load_env_exports
-    uv run --project "$cloud_dir" alembic upgrade head
+    attempt=1
+    until uv run --project "$cloud_dir" alembic upgrade head; do
+      attempt=$((attempt + 1))
+      if (( attempt > 5 )); then
+        exit 1
+      fi
+      warn "alembic upgrade head failed; retrying ($attempt/5) in 2s..."
+      sleep 2
+    done
   ) || die "failed to run alembic upgrade head."
 
   log "Seeding db"
@@ -1642,7 +1663,15 @@ cloud_local_start_db() {
     cd "$cloud_dir/backend" || exit 1
     unset VIRTUAL_ENV
     load_env_exports
-    uv run --project "$cloud_dir" python scripts/seed.py
+    attempt=1
+    until uv run --project "$cloud_dir" python scripts/seed.py; do
+      attempt=$((attempt + 1))
+      if (( attempt > 5 )); then
+        exit 1
+      fi
+      warn "scripts/seed.py failed; retrying ($attempt/5) in 2s..."
+      sleep 2
+    done
   ) || die "failed to run scripts/seed.py."
 
   local init_script="$cloud_dir/backend/storage/init_storage.py"
