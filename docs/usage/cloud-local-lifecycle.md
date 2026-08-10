@@ -44,8 +44,10 @@ If a service is already running, `start` logs a skip message and continues.
 oqtopus cloud-local start user
 ```
 
-For `db`, this runs `docker compose up -d db minio mc` and, if present,
-`storage/init_storage.py` from the installed `cloud` component.
+For `db`, this runs `docker compose up -d db minio mc`, waits for MySQL to
+become ready, applies Alembic migrations (`alembic upgrade head`), seeds the
+database (`scripts/seed.py`), and, if present, runs `storage/init_storage.py`
+from the installed `cloud` component.
 
 For other services, the process is started in the background and its PID
 is written to `$ENV_ROOT/pids/<service>.pid`.
