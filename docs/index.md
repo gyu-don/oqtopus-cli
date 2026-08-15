@@ -19,10 +19,11 @@ tools such as package managers and service managers, while keeping the
 underlying configuration files available for users who need to edit them.
 The CLI itself can be installed with a single command.
 
-Two environment templates are supported:
+Three environment templates are supported:
 
 - **`cloud-local`** — for OQTOPUS Cloud running locally (`cloud`, `frontend`, `admin`)
 - **`backend`** — for the OQTOPUS backend (`engine`, `tranqu`, `gateway`)
+- **`manager`** — for OQTOPUS Manager
 
 With OQTOPUS CLI, users can:
 
@@ -60,6 +61,13 @@ If you are using OQTOPUS CLI for the first time, start here:
 - [Managing Backend Components](./usage/backend-components.md)
 - [Starting and Stopping Backend Services](./usage/backend-lifecycle.md)
 - [Backend Device Status](./usage/backend-device-status.md)
+
+**Manager environment:**
+
+- [Manager Environment](./usage/manager-environment.md)
+- [Manager Configuration](./usage/manager-configuration.md)
+- [Managing The Manager Component](./usage/manager-components.md)
+- [Starting and Stopping The Manager Service](./usage/manager-lifecycle.md)
 
 **Reference and tools:**
 

@@ -10,9 +10,10 @@ oqtopus --help
 oqtopus version
 oqtopus --version
 oqtopus completion <bash|zsh|fish>
-oqtopus init <env_name> --template <backend|cloud-local> [--branch <branch>]
+oqtopus init <env_name> --template <backend|cloud-local|manager> [--branch <branch>]
 oqtopus backend <command>
 oqtopus cloud-local <command>
+oqtopus manager <command>
 ```
 
 ## Environment Creation
@@ -21,6 +22,7 @@ oqtopus cloud-local <command>
 oqtopus init <env_name> --template cloud-local
 oqtopus init <env_name> --template backend
 oqtopus init <env_name> --template backend --branch <branch>
+oqtopus init <env_name> --template manager
 ```
 
 Creates a local environment from the specified template.
@@ -151,6 +153,61 @@ oqtopus backend device-status maintenance
 ```
 
 Valid device status values are `active`, `inactive`, and `maintenance`.
+
+## Manager Information
+
+```bash
+oqtopus manager info
+```
+
+Prints manager environment metadata.
+
+## Manager Component Management
+
+```bash
+oqtopus manager versions
+oqtopus manager install [<version>|branch:<branch>]
+oqtopus manager update
+oqtopus manager uninstall <version>
+oqtopus manager uninstall branch:<branch>
+```
+
+Unlike `oqtopus backend` and `oqtopus cloud-local`, these commands do not take
+a component name argument: manager has a single installable component.
+
+`install` accepts either a release version tag (e.g., `v0.1.0`) or a branch
+reference in the form `branch:<branch>` (e.g., `branch:develop`). Release
+installs are stored in the shared installation root. Branch installs clone the
+repository directly into `$ENV_ROOT/manager` and always re-clone on repeated
+runs.
+
+`versions` lists available stable versions from remote GitHub tags and does
+not require a manager environment. When run inside a manager environment, it
+also marks the current `.metadata` binding with `*`, locally available release
+directories with `(installed)`, and any branch install with
+`branch:<branch> (installed)`.
+
+`uninstall` removes the selected local release directory without checking
+whether another manager environment still references it. For a branch
+install, pass `branch:<branch>` as the version argument: this removes
+`$ENV_ROOT/manager` and also clears the binding from `.metadata`.
+
+## Manager Service Lifecycle
+
+```bash
+oqtopus manager start
+oqtopus manager start --foreground
+oqtopus manager stop
+oqtopus manager restart
+oqtopus manager status
+```
+
+Unlike `oqtopus backend` and `oqtopus cloud-local`, these commands do not take
+a service name argument or an `all` target: manager has a single managed
+service.
+
+`--foreground` keeps runtime stdout and stderr attached to the terminal for
+debugging.
 
 ## Help
 

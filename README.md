@@ -37,6 +37,16 @@ oqtopus backend status
 oqtopus backend stop core
 ```
 
+**Manager environment:**
+
+```bash
+oqtopus init demo --template manager
+oqtopus manager install
+oqtopus manager start
+oqtopus manager status
+oqtopus manager stop
+```
+
 OQTOPUS CLI currently focuses on Linux and macOS local workflows.
 A future Rust implementation is planned separately.
 
