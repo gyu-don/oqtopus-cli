@@ -10,7 +10,7 @@ oqtopus --help
 oqtopus version
 oqtopus --version
 oqtopus completion <bash|zsh|fish>
-oqtopus init <env_name> --template <backend|cloud-local>
+oqtopus init <env_name> --template <backend|cloud-local> [--branch <branch>]
 oqtopus backend <command>
 oqtopus cloud-local <command>
 ```
@@ -20,9 +20,14 @@ oqtopus cloud-local <command>
 ```bash
 oqtopus init <env_name> --template cloud-local
 oqtopus init <env_name> --template backend
+oqtopus init <env_name> --template backend --branch <branch>
 ```
 
 Creates a local environment from the specified template.
+
+By default, the template is fetched from the `main` branch of `oqtopus-cli`.
+Pass `--branch <branch>` to fetch it from a different branch instead — mainly
+useful for testing in-development templates.
 
 ## Cloud-Local Component Management
 
