@@ -6,6 +6,14 @@ A cloud-local environment is a local directory created by:
 oqtopus init <env_name> --template cloud-local
 ```
 
+The template is fetched from the `main` branch of `oqtopus-cli` by default.
+Pass `--branch <branch>` to fetch it from another branch instead (mainly
+useful when testing in-development templates):
+
+```bash
+oqtopus init <env_name> --template cloud-local --branch <branch>
+```
+
 Cloud-local commands must be run from the root of this environment.
 
 ## Environment Name

@@ -5,7 +5,7 @@ set -euo pipefail
 CLI_VERSION="${OQTOPUS_CLI_VERSION:-}"
 CLI_REPO_OWNER="oqtopus-team"
 CLI_REPO_NAME="oqtopus-cli"
-TEMPLATE_BRANCH="main"
+DEFAULT_TEMPLATE_BRANCH="main"
 
 ENGINE_REPO="oqtopus-team/oqtopus-engine"
 TRANQU_REPO="oqtopus-team/tranqu-server"
@@ -78,10 +78,15 @@ EOF
 usage_init() {
   cat <<'EOF'
 Usage:
-  oqtopus init <env_name> --template backend
-  oqtopus init <env_name> --template cloud-local
+  oqtopus init <env_name> --template backend [--branch <branch>]
+  oqtopus init <env_name> --template cloud-local [--branch <branch>]
 
 Creates a local OQTOPUS environment from the official template.
+
+Options:
+  --branch <branch>  Fetch the template from this branch of oqtopus-cli
+                      instead of 'main'. Mainly useful for testing
+                      in-development templates.
 EOF
 }
 
@@ -644,17 +649,18 @@ clone_and_sync_branch_component() {
 
 download_backend_template() {
   local env_dir=$1
+  local branch=$2
   local tmp_dir archive extract_dir template_dir url
   need_command curl
   need_command tar
   need_command cp
   need_command find
   tmp_dir=$(mktemp -d)
-  archive="$tmp_dir/${CLI_REPO_NAME}-${TEMPLATE_BRANCH}.tar.gz"
+  archive="$tmp_dir/template.tar.gz"
   extract_dir="$tmp_dir/extract"
-  url="https://github.com/${CLI_REPO_OWNER}/${CLI_REPO_NAME}/archive/refs/heads/${TEMPLATE_BRANCH}.tar.gz"
+  url="https://github.com/${CLI_REPO_OWNER}/${CLI_REPO_NAME}/archive/refs/heads/${branch}.tar.gz"
   mkdir -p "$extract_dir"
-  curl -fsSL "$url" -o "$archive" || die "failed to download backend template archive."
+  curl -fsSL "$url" -o "$archive" || die "failed to download backend template archive (branch '$branch' may not exist)."
   tar -xzf "$archive" -C "$extract_dir" || die "failed to extract backend template archive."
   template_dir=$(find "$extract_dir" -type d -path "*/templates/backend" | head -n 1)
   [[ -n "$template_dir" ]] || die "templates/backend was not found in the downloaded archive."
@@ -668,24 +674,44 @@ cmd_init() {
     return
   fi
   local env_name=${1:-}
-  local flag=${2:-}
-  local template=${3:-}
-  [[ -n "$env_name" && "$flag" == "--template" && -n "$template" && $# -eq 3 ]] || { usage_init; exit 1; }
+  [[ -n "$env_name" ]] || { usage_init; exit 1; }
+  shift
+  local template="" branch="$DEFAULT_TEMPLATE_BRANCH"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --template)
+        [[ $# -ge 2 ]] || { usage_init; exit 1; }
+        template=$2
+        shift 2
+        ;;
+      --branch)
+        [[ $# -ge 2 ]] || { usage_init; exit 1; }
+        branch=$2
+        shift 2
+        ;;
+      *)
+        usage_init
+        exit 1
+        ;;
+    esac
+  done
+  [[ -n "$template" ]] || { usage_init; exit 1; }
   validate_env_name "$env_name"
   [[ ! -e "$env_name" ]] || die "target directory already exists: $env_name"
   case "$template" in
-    backend) cmd_init_backend "$env_name" ;;
-    cloud-local) cmd_init_cloud_local "$env_name" ;;
+    backend) cmd_init_backend "$env_name" "$branch" ;;
+    cloud-local) cmd_init_cloud_local "$env_name" "$branch" ;;
     *) die "template '$template' is not implemented." ;;
   esac
 }
 
 cmd_init_backend() {
   local env_name=$1
+  local branch=$2
   mkdir -p "$env_name"
   local env_abs install_root created_at
   env_abs=$(abs_path "$env_name")
-  download_backend_template "$env_abs"
+  download_backend_template "$env_abs" "$branch"
   render_env_template "$env_name" "$env_abs/config/.env"
   mkdir -p \
     "$env_abs/pids" \
@@ -711,10 +737,11 @@ EOF
 
 cmd_init_cloud_local() {
   local env_name=$1
+  local branch=$2
   mkdir -p "$env_name"
   local env_abs install_root created_at
   env_abs=$(abs_path "$env_name")
-  download_cloud_local_template "$env_abs"
+  download_cloud_local_template "$env_abs" "$branch"
   mkdir -p \
     "$env_abs/pids" \
     "$env_abs/logs/db" \
@@ -737,17 +764,18 @@ EOF
 
 download_cloud_local_template() {
   local env_dir=$1
+  local branch=$2
   local tmp_dir archive extract_dir template_dir url
   need_command curl
   need_command tar
   need_command cp
   need_command find
   tmp_dir=$(mktemp -d)
-  archive="$tmp_dir/${CLI_REPO_NAME}-${TEMPLATE_BRANCH}.tar.gz"
+  archive="$tmp_dir/template.tar.gz"
   extract_dir="$tmp_dir/extract"
-  url="https://github.com/${CLI_REPO_OWNER}/${CLI_REPO_NAME}/archive/refs/heads/${TEMPLATE_BRANCH}.tar.gz"
+  url="https://github.com/${CLI_REPO_OWNER}/${CLI_REPO_NAME}/archive/refs/heads/${branch}.tar.gz"
   mkdir -p "$extract_dir"
-  curl -fsSL "$url" -o "$archive" || die "failed to download cloud-local template archive."
+  curl -fsSL "$url" -o "$archive" || die "failed to download cloud-local template archive (branch '$branch' may not exist)."
   tar -xzf "$archive" -C "$extract_dir" || die "failed to extract cloud-local template archive."
   template_dir=$(find "$extract_dir" -type d -path "*/templates/cloud-local" | head -n 1)
   [[ -n "$template_dir" ]] || die "templates/cloud-local was not found in the downloaded archive."
@@ -2114,7 +2142,7 @@ _oqtopus()
       esac
       ;;
     init)
-      COMPREPLY=( $(compgen -W "--template backend cloud-local help --help" -- "$cur") )
+      COMPREPLY=( $(compgen -W "--template --branch backend cloud-local help --help" -- "$cur") )
       return 0
       ;;
     completion)
@@ -2170,7 +2198,7 @@ _oqtopus() {
         *) compadd -- $cloud_local_commands ;;
       esac
       ;;
-    init) compadd -- --template help --help $templates ;;
+    init) compadd -- --template --branch help --help $templates ;;
     completion) compadd -- $shells ;;
     *) compadd -- $commands ;;
   esac
@@ -2184,7 +2212,7 @@ completion_fish() {
   cat <<'EOF'
 complete -c oqtopus -f -n "__fish_use_subcommand" -a "init backend cloud-local completion version help --help --version"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
-complete -c oqtopus -f -n "__fish_seen_subcommand_from init" -a "--template backend cloud-local help --help"
+complete -c oqtopus -f -n "__fish_seen_subcommand_from init" -a "--template --branch backend cloud-local help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from backend" -a "install build versions uninstall update start stop restart status device-status info help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from backend; and __fish_seen_subcommand_from install" -a "engine tranqu gateway all --skip-sse-build help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from backend; and __fish_seen_subcommand_from build" -a "sse-runtime help --help"
