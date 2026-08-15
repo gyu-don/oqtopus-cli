@@ -9,6 +9,14 @@ An OQTOPUS backend environment is a local directory created by:
 oqtopus init <env_name> --template backend
 ```
 
+The template is fetched from the `main` branch of `oqtopus-cli` by default.
+Pass `--branch <branch>` to fetch it from another branch instead (mainly
+useful when testing in-development templates):
+
+```bash
+oqtopus init <env_name> --template backend --branch <branch>
+```
+
 Backend commands must be run from the root of this environment.
 
 ## Environment Name
