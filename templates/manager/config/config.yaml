@@ -1,0 +1,92 @@
+# Server settings: binding address and environment data paths
+server:
+  host: localhost
+  port: 38000
+  default_environment_base_path: ./environments
+  environments_file: ./config/environments.yaml
+
+# Behavior settings: screen behavior tuning (buffer sizes, timeouts, feature flags)
+behavior:
+  log_tail_lines: 100
+  log_buffer_lines: 1000
+  file_edit_lock_timeout_sec: 600
+
+# Appearance settings: app branding and sidebar links
+appearance:
+  app_name: OQTOPUS Manager
+  app_icon_path: ./assets/favicon.svg
+  favicon_path: ./assets/favicon.svg
+  environment_templates:
+    - cloud-local
+    - backend
+  sidebar_links:
+    - label: Documentation
+      url: https://github.com/snuffkin/oqtopus-manager
+    - label: OQTOPUS Cloud
+      url: https://your-cloud-url/
+    - label: OQTOPUS Admin
+      url: https://your-admin-url/
+    - label: OQTOPUS Monitoring
+      url: https://your-monitoring-url/
+    - label: QDash
+      url: https://your-qdash-url/
+
+# Authentication settings
+auth:
+  provider: none  # "none" disables auth | "header" reads JWT from a proxy-injected header
+
+  # Active when provider: none
+  none:
+    default_account: admin_user  # account name shown in /me and debug pages
+    default_roles: [admin]       # roles granted when auth is disabled
+
+  # Active when provider: header
+  header:
+    jwt_header: authorization        # "authorization" → Bearer prefix stripped automatically
+    user_claim: email                # JWT claim for the user's email
+    roles_claim: "cognito:groups"    # JWT claim for roles; list = nested path
+    #   e.g. Cloudflare: ["custom", "cognito:groups"]
+    allow_raw_roles:                 # glob patterns applied before role_mappings; omit to allow all
+      - oqtopus-manager.*
+    signature_verification:          # verify JWT signature to prevent token forgery
+      enabled: false                 # set true to enable; issuer and audience required
+      issuer: https://your-issuer-url/       # e.g. Cognito user pool URL
+      # jwks_url: https://your-jwks-url/    # omit to derive from issuer automatically
+      audience: your-audience               # e.g. Cognito App client ID
+    # signout_url: https://your-signout-url/  # when set, adds a "Sign out" link to the sidebar
+
+  # raw roles_claim value → display name; unmapped values pass through as-is
+  role_mappings:
+    oqtopus-manager.operator: operator
+    oqtopus-manager.admin: admin
+
+# Permission-based access control (optional).
+#
+# When this section is present, routes enforce fine-grained permission strings
+# (e.g. "environment.get") and require_permission() is used in route handlers.
+#
+# When this section is omitted, the application falls back to role-based access
+# control: use require_role() in route handlers and routes check role membership
+# directly (e.g. "admin", "operator") without a permission mapping.
+#
+# _extends_ defines single-level inheritance: the child role inherits all
+# permissions of the parent role in addition to its own.
+permissions:
+  _extends_:
+    admin: operator
+
+  operator:
+    - environment.get
+    - environment.create
+    - environment.delete
+    - environment.config.get
+    - environment.config.update
+    - environment.log.get
+    - environment.service.manage
+    - environment.component.manage
+    - app_settings.get
+  admin:
+    - app_settings.update
+
+# Debug settings: enables /debug route for inspecting request headers and JWT. Never enable in production.
+enable_debug_endpoint: false

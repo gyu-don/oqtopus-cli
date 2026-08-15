@@ -26,6 +26,8 @@ CLOUD_LOCAL_SERVICES=(db worker user_signup admin provider user)
 CLOUD_LOCAL_START_ORDER=(db worker user_signup admin provider user)
 CLOUD_LOCAL_STOP_ORDER=(user provider admin user_signup worker db)
 
+MANAGER_REPO="oqtopus-team/oqtopus-manager"
+
 ENV_ROOT=""
 INSTALL_ROOT=""
 ENV_NAME=""
@@ -67,6 +69,7 @@ Commands:
   init         Create an OQTOPUS environment.
   cloud-local  Manage local cloud-local components and services.
   backend      Manage local backend components and services.
+  manager      Manage the local manager component and service.
   completion   Print shell completion scripts.
   version      Print the installed CLI version.
   help         Show help.
@@ -80,6 +83,7 @@ usage_init() {
 Usage:
   oqtopus init <env_name> --template backend [--branch <branch>]
   oqtopus init <env_name> --template cloud-local [--branch <branch>]
+  oqtopus init <env_name> --template manager [--branch <branch>]
 
 Creates a local OQTOPUS environment from the official template.
 
@@ -223,6 +227,14 @@ cloud_local_data_root() {
     printf '%s/oqtopus/cloud-local/releases\n' "$XDG_DATA_HOME"
   else
     printf '%s/.local/share/oqtopus/cloud-local/releases\n' "$HOME"
+  fi
+}
+
+manager_data_root() {
+  if [[ -n "${XDG_DATA_HOME:-}" ]]; then
+    printf '%s/oqtopus/manager/releases\n' "$XDG_DATA_HOME"
+  else
+    printf '%s/.local/share/oqtopus/manager/releases\n' "$HOME"
   fi
 }
 
@@ -701,6 +713,7 @@ cmd_init() {
   case "$template" in
     backend) cmd_init_backend "$env_name" "$branch" ;;
     cloud-local) cmd_init_cloud_local "$env_name" "$branch" ;;
+    manager) cmd_init_manager "$env_name" "$branch" ;;
     *) die "template '$template' is not implemented." ;;
   esac
 }
@@ -760,6 +773,49 @@ env_root=$env_abs
 created_at=$created_at
 EOF
   log "Created cloud-local environment: $env_abs"
+}
+
+cmd_init_manager() {
+  local env_name=$1
+  local branch=$2
+  mkdir -p "$env_name"
+  local env_abs install_root created_at
+  env_abs=$(abs_path "$env_name")
+  download_manager_template "$env_abs" "$branch"
+  mkdir -p \
+    "$env_abs/pids" \
+    "$env_abs/logs"
+  install_root=$(manager_data_root)
+  created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  cat > "$env_abs/.metadata" <<EOF
+template=manager
+install_root=$install_root
+env_name=$env_name
+env_root=$env_abs
+created_at=$created_at
+EOF
+  log "Created manager environment: $env_abs"
+}
+
+download_manager_template() {
+  local env_dir=$1
+  local branch=$2
+  local tmp_dir archive extract_dir template_dir url
+  need_command curl
+  need_command tar
+  need_command cp
+  need_command find
+  tmp_dir=$(mktemp -d)
+  archive="$tmp_dir/template.tar.gz"
+  extract_dir="$tmp_dir/extract"
+  url="https://github.com/${CLI_REPO_OWNER}/${CLI_REPO_NAME}/archive/refs/heads/${branch}.tar.gz"
+  mkdir -p "$extract_dir"
+  curl -fsSL "$url" -o "$archive" || die "failed to download manager template archive (branch '$branch' may not exist)."
+  tar -xzf "$archive" -C "$extract_dir" || die "failed to extract manager template archive."
+  template_dir=$(find "$extract_dir" -type d -path "*/templates/manager" | head -n 1)
+  [[ -n "$template_dir" ]] || die "templates/manager was not found in the downloaded archive."
+  cp -R "$template_dir"/. "$env_dir"/
+  rm -rf "$tmp_dir"
 }
 
 download_cloud_local_template() {
@@ -2075,6 +2131,544 @@ cmd_cloud_local() {
   esac
 }
 
+# =============================================================================
+# manager subcommand
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# manager usage
+# -----------------------------------------------------------------------------
+
+usage_manager() {
+  cat <<'EOF'
+Usage:
+  oqtopus manager <command> [args]
+
+Commands:
+  install    Install a manager release.
+  uninstall  Remove an installed release.
+  update     Install the latest release and update the environment binding.
+  versions   List available manager versions.
+  start      Start the manager service.
+  stop       Stop the manager service.
+  restart    Restart the manager service.
+  status     Show process status.
+  info       Show manager environment information.
+  help       Show this help.
+EOF
+}
+
+usage_manager_install() {
+  cat <<'EOF'
+Usage:
+  oqtopus manager install [version|branch:<branch>]
+EOF
+}
+
+usage_manager_uninstall() {
+  cat <<'EOF'
+Usage:
+  oqtopus manager uninstall <version|branch:<branch>>
+EOF
+}
+
+usage_manager_update() {
+  cat <<'EOF'
+Usage:
+  oqtopus manager update
+EOF
+}
+
+usage_manager_versions() {
+  cat <<'EOF'
+Usage:
+  oqtopus manager versions
+EOF
+}
+
+usage_manager_start() {
+  cat <<'EOF'
+Usage:
+  oqtopus manager start
+  oqtopus manager start --foreground
+EOF
+}
+
+usage_manager_stop() {
+  cat <<'EOF'
+Usage:
+  oqtopus manager stop
+EOF
+}
+
+usage_manager_restart() {
+  cat <<'EOF'
+Usage:
+  oqtopus manager restart
+EOF
+}
+
+# -----------------------------------------------------------------------------
+# manager metadata helpers
+# -----------------------------------------------------------------------------
+
+validate_manager_env() {
+  local current template metadata_env_root
+  [[ -f .metadata ]] || die $'.metadata not found.\nThis directory is not an OQTOPUS manager environment.'
+  template=$(metadata_get template) || die "invalid .metadata: missing template."
+  [[ "$template" == "manager" ]] || die "invalid environment template. Found template='$template', but 'oqtopus manager' requires template='manager'."
+  metadata_env_root=$(metadata_get env_root) || die "invalid .metadata: missing env_root."
+  current=$(pwd -P)
+  if [[ "$metadata_env_root" != "$current" ]]; then
+    die $'Current directory does not match env_root.\n'"env_root = $metadata_env_root"$'\n'"current  = $current"
+  fi
+  ENV_ROOT="$metadata_env_root"
+  INSTALL_ROOT=$(metadata_get install_root) || die "invalid .metadata: missing install_root."
+}
+
+try_load_manager_env() {
+  local current template metadata_env_root metadata_install_root
+  [[ -f .metadata ]] || return 1
+  template=$(metadata_get template 2>/dev/null) || return 1
+  [[ "$template" == "manager" ]] || return 1
+  metadata_env_root=$(metadata_get env_root 2>/dev/null) || return 1
+  metadata_install_root=$(metadata_get install_root 2>/dev/null) || return 1
+  current=$(pwd -P)
+  [[ "$metadata_env_root" == "$current" ]] || return 1
+  ENV_ROOT="$metadata_env_root"
+  INSTALL_ROOT="$metadata_install_root"
+}
+
+manager_dir() {
+  local version
+  version=$(metadata_get manager_version) || return 1
+  if is_branch_version "$version"; then
+    printf '%s/manager\n' "$ENV_ROOT"
+  else
+    printf '%s/manager-%s\n' "$INSTALL_ROOT" "$version"
+  fi
+}
+
+manager_install_complete() {
+  local target_dir=$1
+  [[ -d "$target_dir/.venv" ]]
+}
+
+# -----------------------------------------------------------------------------
+# manager version listing
+# -----------------------------------------------------------------------------
+
+list_manager_versions() {
+  local tags_url tags_json tag_count versions current_version version
+  local have_env_context=0
+  local remote_versions installed_versions display_versions
+  need_command curl
+  need_command jq
+  tags_url="https://api.github.com/repos/${MANAGER_REPO}/tags?per_page=100"
+  tags_json=$(curl -fsSL "$tags_url") || die "failed to query GitHub tags API: $tags_url"
+  tag_count=$(jq 'length' <<< "$tags_json")
+  if [[ "$tag_count" == "100" ]]; then
+    warn "the GitHub tags API returned 100 tags."
+    warn "Additional tags may exist, so the version list may be incomplete."
+  fi
+  versions=$(jq -r '[.[].name as $tag | $tag | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") | {tag: $tag, major: (.major | tonumber), minor: (.minor | tonumber), patch: (.patch | tonumber)}] | sort_by([.major, .minor, .patch]) | reverse | .[].tag' <<< "$tags_json")
+  [[ -n "$versions" ]] || die "no stable versions found for manager."
+  remote_versions="$versions"
+  installed_versions=""
+  display_versions="$versions"
+
+  if try_load_manager_env; then
+    have_env_context=1
+    current_version=$(metadata_get manager_version 2>/dev/null || true)
+    if [[ -n "$current_version" ]]; then
+      display_versions="${display_versions}"$'\n'"${current_version}"
+    fi
+    if [[ -d "$INSTALL_ROOT" ]]; then
+      for release_dir in "$INSTALL_ROOT"/manager-v*; do
+        [[ -d "$release_dir" ]] || continue
+        version=$(basename "$release_dir")
+        version=${version#"manager-"}
+        [[ -n "$version" ]] || continue
+        installed_versions="${installed_versions}"$'\n'"${version}"
+        display_versions="${display_versions}"$'\n'"${version}"
+      done
+    fi
+  fi
+
+  printf 'manager:\n'
+  printf '%s\n' "$display_versions" | jq -R -s -r '
+    split("\n")
+    | map(select(length > 0))
+    | unique
+    | map(
+        . as $tag
+        | if ($tag | startswith("branch:")) then
+            {tag: $tag, branch: true, stable: false, major: -1, minor: -1, patch: -1}
+          elif test("^v[0-9]+\\.[0-9]+\\.[0-9]+$") then
+            capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$")
+            | {tag: $tag, branch: false, stable: true, major: (.major | tonumber), minor: (.minor | tonumber), patch: (.patch | tonumber)}
+          else
+            {tag: $tag, branch: false, stable: false, major: -1, minor: -1, patch: -1}
+          end
+      )
+    | sort_by(.branch, .stable, .major, .minor, .patch, .tag)
+    | reverse
+    | .[].tag
+  ' | while IFS= read -r version; do
+    local prefix annotation display_tag
+    prefix="  "
+    annotation=""
+    display_tag="$version"
+    if [[ "$have_env_context" -eq 1 && "${current_version:-}" == "$version" ]]; then
+      prefix="* "
+    fi
+    if [[ "$version" == branch:* ]]; then
+      display_tag="$version"
+      annotation="installed"
+    else
+      if [[ "$have_env_context" -eq 1 ]] && line_list_contains "$version" "$installed_versions"; then
+        annotation="installed"
+      fi
+      if ! line_list_contains "$version" "$remote_versions"; then
+        if [[ -n "$annotation" ]]; then
+          annotation="${annotation}, not in remote tags"
+        else
+          annotation="not in remote tags"
+        fi
+      fi
+    fi
+    if [[ -n "$annotation" ]]; then
+      printf '%s%s (%s)\n' "$prefix" "$display_tag" "$annotation"
+    else
+      printf '%s%s\n' "$prefix" "$display_tag"
+    fi
+  done
+}
+
+# -----------------------------------------------------------------------------
+# manager install helpers
+# -----------------------------------------------------------------------------
+
+install_manager() {
+  local version=${1:-}
+  local target_dir
+  need_command uv
+  if [[ -z "$version" ]]; then
+    version=$(resolve_latest_version "$MANAGER_REPO")
+  fi
+  target_dir="$INSTALL_ROOT/manager-${version}"
+  mkdir -p "$INSTALL_ROOT"
+  if manager_install_complete "$target_dir"; then
+    log "manager $version is already installed; reusing $target_dir"
+  else
+    if [[ -e "$target_dir" ]]; then
+      log "Removing incomplete installation: $target_dir"
+      rm -rf "$target_dir"
+    fi
+    log "Installing manager $version"
+    download_github_release "$MANAGER_REPO" "manager" "$version" "$target_dir"
+    uv sync --frozen --no-dev --project "$target_dir" || die "failed to synchronize manager $version with uv."
+  fi
+  metadata_set manager_version "$version"
+  log "Bound manager_version=$version"
+}
+
+clone_and_sync_manager_branch() {
+  local branch=$1
+  local repo_url target_dir version
+  need_command git
+  need_command uv
+  repo_url="https://github.com/${MANAGER_REPO}.git"
+  target_dir="$ENV_ROOT/manager"
+  if [[ -e "$target_dir" ]]; then
+    log "Removing existing branch installation: $target_dir"
+    rm -rf "$target_dir"
+  fi
+  log "Cloning manager from branch '$branch'"
+  git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir" || die "failed to clone manager from branch '$branch'."
+  version="branch:${branch}"
+  uv sync --frozen --no-dev --project "$target_dir" || die "failed to synchronize manager $version with uv."
+  metadata_set manager_version "$version"
+  log "Bound manager_version=$version"
+}
+
+# -----------------------------------------------------------------------------
+# manager service management
+# -----------------------------------------------------------------------------
+
+manager_service_command() {
+  local project
+  project=$(manager_dir) || die "cannot start manager. Missing manager_version in .metadata."
+  [[ -d "$project" ]] || die "cannot start manager. Installed release directory not found: $project"
+  printf '%q ' env -u VIRTUAL_ENV uv run --project "$project" python -m oqtopus_manager.main -c "$ENV_ROOT/config/config.yaml" -l "$ENV_ROOT/config/logging.yaml"
+}
+
+manager_start() {
+  local foreground=${1:-0}
+  local pid_file="$ENV_ROOT/pids/manager.pid"
+  local pid cmd status recorded_pid
+  acquire_service_start_lock "manager"
+  if [[ -f "$pid_file" ]]; then
+    pid=$(cat "$pid_file")
+    if pid_alive "$pid"; then
+      release_service_start_lock
+      log "manager is already running (PID $pid); skipping."
+      return 0
+    fi
+    rm -f "$pid_file"
+  fi
+  need_command uv
+  cmd=$(manager_service_command)
+  if [[ "$foreground" -eq 1 ]]; then
+    (
+      cd "$ENV_ROOT"
+      ( set +e; eval "$cmd"; exit "$?" ) &
+      pid=$!
+      printf '%s\n' "$pid" > "$pid_file"
+      release_service_start_lock
+      log "Started manager in foreground (PID $pid)"
+      set +e
+      wait "$pid"
+      status=$?
+      set -e
+      recorded_pid=$(cat "$pid_file" 2>/dev/null || true)
+      if [[ "$recorded_pid" == "$pid" ]]; then
+        rm -f "$pid_file"
+      fi
+      exit "$status"
+    )
+    return
+  fi
+  (
+    trap '' HUP
+    cd "$ENV_ROOT"
+    eval "exec $cmd" >/dev/null 2>&1
+  ) &
+  pid=$!
+  printf '%s\n' "$pid" > "$pid_file"
+  sleep 0.2
+  if ! pid_alive "$pid"; then
+    rm -f "$pid_file"
+    die "failed to start manager. The process exited immediately."
+  fi
+  log "Started manager (PID $pid)"
+  release_service_start_lock
+}
+
+manager_stop() {
+  local pid_file="$ENV_ROOT/pids/manager.pid"
+  local pid i
+  if [[ ! -f "$pid_file" ]]; then
+    log "manager: Stopped"
+    return 0
+  fi
+  pid=$(cat "$pid_file")
+  if ! pid_alive "$pid"; then
+    rm -f "$pid_file"
+    log "manager: Stopped"
+    return 0
+  fi
+  if ! kill -TERM "$pid"; then
+    printf "Error: failed to stop 'manager'. Could not send TERM to PID %s.\n" "$pid" >&2
+    return 1
+  fi
+  for i in 1 2 3 4 5; do
+    sleep 1
+    if ! pid_alive "$pid"; then
+      rm -f "$pid_file"
+      log "Stopped manager"
+      return 0
+    fi
+  done
+  printf "Error: failed to stop 'manager'. The process did not exit within 5 seconds after TERM was sent.\n" >&2
+  return 1
+}
+
+# -----------------------------------------------------------------------------
+# manager commands
+# -----------------------------------------------------------------------------
+
+cmd_manager_versions() {
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" ]]; then
+    usage_manager_versions
+    return
+  fi
+  [[ $# -eq 0 ]] || { usage_manager_versions; exit 1; }
+  list_manager_versions
+}
+
+cmd_manager_install() {
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" ]]; then
+    usage_manager_install
+    return
+  fi
+  validate_manager_env
+  local version=""
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -*)
+        die "unknown install option: $arg"
+        ;;
+      *)
+        [[ -z "$version" ]] || { usage_manager_install; exit 1; }
+        version="$arg"
+        ;;
+    esac
+  done
+  if [[ "$version" == branch:* ]]; then
+    local branch
+    branch=$(branch_version_ref "$version")
+    [[ -n "$branch" ]] || die "invalid branch version format: $version (expected branch:<branch>)"
+    clone_and_sync_manager_branch "$branch"
+  else
+    install_manager "$version"
+  fi
+}
+
+cmd_manager_uninstall() {
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" ]]; then
+    usage_manager_uninstall
+    return
+  fi
+  validate_manager_env
+  local version=${1:-}
+  local target_dir
+  [[ -n "$version" && $# -eq 1 ]] || { usage_manager_uninstall; exit 1; }
+  if is_branch_version "$version"; then
+    target_dir="$ENV_ROOT/manager"
+    [[ -d "$target_dir" ]] || die "branch install not found: $target_dir"
+    rm -rf "$target_dir"
+    metadata_unset manager_version
+    log "Removed $target_dir"
+  else
+    target_dir="$INSTALL_ROOT/manager-${version}"
+    [[ -d "$target_dir" ]] || die "installed release not found: $target_dir"
+    rm -rf "$target_dir"
+    log "Removed $target_dir"
+  fi
+}
+
+cmd_manager_update() {
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" ]]; then
+    usage_manager_update
+    return
+  fi
+  validate_manager_env
+  [[ $# -eq 0 ]] || { usage_manager_update; exit 1; }
+  install_manager
+}
+
+cmd_manager_start() {
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" ]]; then
+    usage_manager_start
+    return
+  fi
+  validate_manager_env
+  local foreground=0
+  if [[ "${1:-}" == "--foreground" ]]; then
+    foreground=1
+    shift
+  fi
+  [[ $# -eq 0 ]] || { usage_manager_start; exit 1; }
+  manager_start "$foreground"
+}
+
+cmd_manager_stop() {
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" ]]; then
+    usage_manager_stop
+    return
+  fi
+  validate_manager_env
+  [[ $# -eq 0 ]] || { usage_manager_stop; exit 1; }
+  manager_stop
+}
+
+cmd_manager_restart() {
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" ]]; then
+    usage_manager_restart
+    return
+  fi
+  validate_manager_env
+  [[ $# -eq 0 ]] || { usage_manager_restart; exit 1; }
+  manager_stop
+  manager_start
+}
+
+cmd_manager_status() {
+  validate_manager_env
+  local pid_file="$ENV_ROOT/pids/manager.pid"
+  local pid
+  if [[ -f "$pid_file" ]]; then
+    pid=$(cat "$pid_file")
+    if pid_alive "$pid"; then
+      printf 'manager: Running (PID %s)\n' "$pid"
+      return
+    fi
+  fi
+  printf 'manager: Stopped\n'
+}
+
+cmd_manager_info() {
+  validate_manager_env
+  log "=== Manager Info (.metadata) ==="
+  cat .metadata
+  printf '\n'
+}
+
+# -----------------------------------------------------------------------------
+# manager command dispatcher
+# -----------------------------------------------------------------------------
+
+cmd_manager() {
+  case "${1:-}" in
+    help|--help|"")
+      usage_manager
+      ;;
+    install)
+      shift
+      cmd_manager_install "$@"
+      ;;
+    uninstall)
+      shift
+      cmd_manager_uninstall "$@"
+      ;;
+    update)
+      shift
+      cmd_manager_update "$@"
+      ;;
+    versions)
+      shift
+      cmd_manager_versions "$@"
+      ;;
+    start)
+      shift
+      cmd_manager_start "$@"
+      ;;
+    stop)
+      shift
+      cmd_manager_stop "$@"
+      ;;
+    restart)
+      shift
+      cmd_manager_restart "$@"
+      ;;
+    status)
+      shift
+      [[ $# -eq 0 ]] || die "oqtopus manager status does not accept arguments."
+      cmd_manager_status
+      ;;
+    info)
+      shift
+      [[ $# -eq 0 ]] || die "oqtopus manager info does not accept arguments."
+      cmd_manager_info
+      ;;
+    *)
+      die "unknown manager command: $1"
+      ;;
+  esac
+}
+
 # -----------------------------------------------------------------------------
 # completion subcommand
 # -----------------------------------------------------------------------------
@@ -2141,8 +2735,28 @@ _oqtopus()
           ;;
       esac
       ;;
+    manager)
+      case "${COMP_WORDS[2]}" in
+        install|versions|update|uninstall)
+          COMPREPLY=( $(compgen -W "help --help" -- "$cur") )
+          return 0
+          ;;
+        start)
+          COMPREPLY=( $(compgen -W "--foreground help --help" -- "$cur") )
+          return 0
+          ;;
+        stop|restart)
+          COMPREPLY=( $(compgen -W "help --help" -- "$cur") )
+          return 0
+          ;;
+        *)
+          COMPREPLY=( $(compgen -W "install versions uninstall update start stop restart status info help --help" -- "$cur") )
+          return 0
+          ;;
+      esac
+      ;;
     init)
-      COMPREPLY=( $(compgen -W "--template --branch backend cloud-local help --help" -- "$cur") )
+      COMPREPLY=( $(compgen -W "--template --branch backend cloud-local manager help --help" -- "$cur") )
       return 0
       ;;
     completion)
@@ -2150,7 +2764,7 @@ _oqtopus()
       return 0
       ;;
     *)
-      COMPREPLY=( $(compgen -W "init backend cloud-local completion version help --help --version" -- "$cur") )
+      COMPREPLY=( $(compgen -W "init backend cloud-local manager completion version help --help --version" -- "$cur") )
       return 0
       ;;
   esac
@@ -2164,8 +2778,8 @@ completion_zsh() {
 #compdef oqtopus
 
 _oqtopus() {
-  local -a commands backend_commands cloud_local_commands install_components build_targets update_components start_services services device_status cloud_local_components cloud_local_services shells templates
-  commands=(init backend cloud-local completion version help --help --version)
+  local -a commands backend_commands cloud_local_commands install_components build_targets update_components start_services services device_status cloud_local_components cloud_local_services manager_commands manager_help_only manager_start_opts shells templates
+  commands=(init backend cloud-local manager completion version help --help --version)
   backend_commands=(install build versions uninstall update start stop restart status device-status info help --help)
   cloud_local_commands=(versions install uninstall update start stop restart status info help --help)
   install_components=(engine tranqu gateway all --skip-sse-build help --help)
@@ -2176,8 +2790,11 @@ _oqtopus() {
   device_status=(show active inactive maintenance help --help)
   cloud_local_components=(cloud frontend admin all help --help)
   cloud_local_services=(db user provider admin user_signup worker all --foreground help --help)
+  manager_commands=(install versions uninstall update start stop restart status info help --help)
+  manager_help_only=(help --help)
+  manager_start_opts=(--foreground help --help)
   shells=(bash zsh fish)
-  templates=(backend cloud-local)
+  templates=(backend cloud-local manager)
 
   case $words[2] in
     backend)
@@ -2198,6 +2815,13 @@ _oqtopus() {
         *) compadd -- $cloud_local_commands ;;
       esac
       ;;
+    manager)
+      case $words[3] in
+        install|versions|update|uninstall|stop|restart) compadd -- $manager_help_only ;;
+        start) compadd -- $manager_start_opts ;;
+        *) compadd -- $manager_commands ;;
+      esac
+      ;;
     init) compadd -- --template --branch help --help $templates ;;
     completion) compadd -- $shells ;;
     *) compadd -- $commands ;;
@@ -2210,9 +2834,9 @@ EOF
 
 completion_fish() {
   cat <<'EOF'
-complete -c oqtopus -f -n "__fish_use_subcommand" -a "init backend cloud-local completion version help --help --version"
+complete -c oqtopus -f -n "__fish_use_subcommand" -a "init backend cloud-local manager completion version help --help --version"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
-complete -c oqtopus -f -n "__fish_seen_subcommand_from init" -a "--template --branch backend cloud-local help --help"
+complete -c oqtopus -f -n "__fish_seen_subcommand_from init" -a "--template --branch backend cloud-local manager help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from backend" -a "install build versions uninstall update start stop restart status device-status info help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from backend; and __fish_seen_subcommand_from install" -a "engine tranqu gateway all --skip-sse-build help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from backend; and __fish_seen_subcommand_from build" -a "sse-runtime help --help"
@@ -2223,6 +2847,8 @@ complete -c oqtopus -f -n "__fish_seen_subcommand_from backend; and __fish_seen_
 complete -c oqtopus -f -n "__fish_seen_subcommand_from cloud-local" -a "versions install uninstall update start stop restart status info help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from cloud-local; and __fish_seen_subcommand_from install uninstall update versions" -a "cloud frontend admin all help --help"
 complete -c oqtopus -f -n "__fish_seen_subcommand_from cloud-local; and __fish_seen_subcommand_from start stop restart" -a "db user provider admin user_signup worker all --foreground help --help"
+complete -c oqtopus -f -n "__fish_seen_subcommand_from manager" -a "install versions uninstall update start stop restart status info help --help"
+complete -c oqtopus -f -n "__fish_seen_subcommand_from manager; and __fish_seen_subcommand_from start" -a "--foreground help --help"
 EOF
 }
 
@@ -2265,6 +2891,10 @@ main() {
     cloud-local)
       shift
       cmd_cloud_local "$@"
+      ;;
+    manager)
+      shift
+      cmd_manager "$@"
       ;;
     completion)
       shift
