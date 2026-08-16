@@ -1580,7 +1580,7 @@ cloud_local_db_running() {
   cloud_dir=$(cloud_local_cloud_dir) 2>/dev/null || return 1
   [[ -f "$cloud_dir/backend/compose.yaml" ]] || return 1
   docker compose --project-name "$ENV_NAME" -f "$cloud_dir/backend/compose.yaml" \
-    ps --status running --quiet 2>/dev/null | grep -q .
+    ps --status running --quiet db 2>/dev/null | grep -q .
 }
 
 cloud_local_service_command() {
@@ -1637,12 +1637,12 @@ cloud_local_start_db() {
   cloud_dir=$(cloud_local_cloud_dir) || die "cannot start 'db': cloud component is not installed."
   [[ -f "$cloud_dir/backend/compose.yaml" ]] || die "cannot start 'db': compose.yaml not found in $cloud_dir/backend"
   if cloud_local_db_running; then
-    log "db is already running; skipping."
-    return 0
+    log "db is already running; skipping container startup."
+  else
+    log "Starting db"
+    docker compose --project-name "$ENV_NAME" -f "$cloud_dir/backend/compose.yaml" up -d db minio mc \
+      || die "failed to start db with docker compose."
   fi
-  log "Starting db"
-  docker compose --project-name "$ENV_NAME" -f "$cloud_dir/backend/compose.yaml" up -d db minio mc \
-    || die "failed to start db with docker compose."
 
   log "Waiting for db to be ready"
   local db_wait_attempts=0
