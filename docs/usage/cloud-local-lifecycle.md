@@ -21,6 +21,12 @@ The `db` service starts a MySQL database and a MinIO object storage instance
 via `docker compose`. All other services are uvicorn or Python processes
 managed with PID files.
 
+`oqtopus cloud-local start db` checks only the `db` container to decide
+whether to skip `docker compose up`. Database migrations and seeding always
+run afterward, even when container startup was skipped, because both are
+idempotent — this keeps the schema consistent even if the `db` container was
+previously removed and recreated without going through the CLI.
+
 ## Start All Services
 
 ```bash
