@@ -1018,8 +1018,14 @@ load_env_exports() {
     value=${line#*=}
     [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     value=${value%$'\r'}
-    if [[ "$value" =~ ^\".*\"$ || "$value" =~ ^\'.*\'$ ]]; then
-      value=${value:1:${#value}-2}
+    if [[ "$value" =~ ^\"([^\"]*)\" ]] || [[ "$value" =~ ^\'([^\']*)\' ]]; then
+      value=${BASH_REMATCH[1]}
+    else
+      # Strip an unquoted trailing "# comment" (e.g. "4194304  # 4MB" -> "4194304").
+      # Without this, the literal comment text ends up in the exported value and
+      # can corrupt downstream YAML config substitution.
+      value="${value%%[[:space:]]#*}"
+      value="${value%"${value##*[![:space:]]}"}"
     fi
     export "$key=$value"
   done < "$file"
