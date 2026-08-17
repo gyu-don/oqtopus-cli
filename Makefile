@@ -15,7 +15,7 @@ diff-backend-configs: ## Compare backend template configs against upstream repos
 	@scripts/diff-backend-configs.sh
 
 docs-lint: ## Run documentation linting
-	@uv run pymarkdownlnt scan docs
+	@uv run pymarkdownlnt scan -r docs
 
 docs-build: ## Build documentation
 	@uv run mkdocs build

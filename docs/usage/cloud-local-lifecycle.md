@@ -129,11 +129,8 @@ oqtopus cloud-local restart user
 
 ## Process Output And Logs
 
-By default, runtime stdout and stderr for process services are written to:
-
-```text
-$ENV_ROOT/logs/<service>/service.log
-```
+By default, runtime stdout and stderr for process services are written to
+`$ENV_ROOT/logs/<service>/service.log`.
 
 Use `--foreground` when you need to inspect runtime output directly while
 debugging one service.

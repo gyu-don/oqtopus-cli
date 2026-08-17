@@ -19,6 +19,11 @@ nav:
           - Managing Backend Components: usage/backend-components.md
           - Starting and Stopping Backend Services: usage/backend-lifecycle.md
           - Backend Device Status: usage/backend-device-status.md
+      - Manager:
+          - Manager Environment: usage/manager-environment.md
+          - Manager Configuration: usage/manager-configuration.md
+          - Managing The Manager Component: usage/manager-components.md
+          - Starting and Stopping The Manager Service: usage/manager-lifecycle.md
       - Shell Completion: usage/shell-completion.md
       - Troubleshooting: usage/troubleshooting.md
       - Command Reference: usage/command-reference.md
