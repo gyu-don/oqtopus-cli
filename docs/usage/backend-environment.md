@@ -83,7 +83,7 @@ starting with `.`, `_`, or `-`.
 - the installed component versions bound to this environment.
 
 Do not move an environment directory after creating it. Backend commands check
-that the current directory matches the `env_root` recorded in `.metadata`.
+that the current directory matches the `environment_root` recorded in `.metadata`.
 
 ## `config/`
 
