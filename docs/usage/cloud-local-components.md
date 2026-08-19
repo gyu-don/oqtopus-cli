@@ -81,12 +81,10 @@ This is intended for development and testing of pre-release features.
 
 Unlike a release install, a branch install:
 
-- Clones the repository with `git clone --depth 1` into `$ENV_ROOT/<component>/`
-  instead of the shared installation root.
-- Always removes the existing directory and re-clones on repeated runs.
+- Downloads the branch's current commit as a tarball into
+  `$ENV_ROOT/<component>/` instead of the shared installation root.
+- Always removes the existing directory and re-downloads on repeated runs.
 - Records the branch name in `.metadata`: `cloud_local_cloud_version=branch:develop`
-
-`git` must be installed to use this feature.
 
 To remove a branch install:
 
