@@ -93,17 +93,10 @@ parse_args() {
 }
 
 latest_version_from_tags() {
-  tags_json=$1
-
-  tag_count=$(printf '%s\n' "$tags_json" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | wc -l | tr -d ' ')
-  if [ "$tag_count" = "100" ]; then
-    warn "the GitHub tags API returned 100 tags."
-    warn "Additional tags may exist, so latest version resolution may be incomplete."
-  fi
+  tags=$1
 
   latest=$(
-    printf '%s\n' "$tags_json" |
-      sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+    printf '%s\n' "$tags" |
       awk '
         /^v[0-9]+\.[0-9]+\.[0-9]+$/ {
           version = substr($0, 2)
@@ -137,17 +130,43 @@ latest_version_from_tags() {
   printf '%s\n' "$latest"
 }
 
+remote_refs_url() {
+  printf 'https://github.com/%s/%s.git/info/refs?service=git-upload-pack\n' "$REPO_OWNER" "$REPO_NAME"
+}
+
+# Outputs "<sha> refs/..." lines for every ref the remote advertises. Must
+# not call die: this is invoked from inside command substitution, where
+# exit would only terminate the subshell, so callers check the return
+# code themselves.
+fetch_remote_refs() {
+  refs_file="$TMP_DIR/refs.dat"
+  if ! curl -fsSL "$(remote_refs_url)" -o "$refs_file"; then
+    return 1
+  fi
+  # The response is pkt-line framed and the first ref line embeds a NUL
+  # before the capability list; reading it via command substitution would
+  # make the shell print a "null byte" warning to stderr, so it is read
+  # from a file and NULs are stripped before grep sees it.
+  LC_ALL=C tr -d '\0' < "$refs_file" | LC_ALL=C grep -ao '[0-9a-f]\{40\} refs/[^ [:cntrl:]]*'
+}
+
+# Outputs one tag name per line (annotated tags' peeled "^{}" entries removed).
+fetch_remote_tags() {
+  tags=$(fetch_remote_refs \
+         | sed -n 's|^[0-9a-f]\{40\} refs/tags/||p' \
+         | grep -v '{}$' \
+         | sort -u) || return 1
+  [ -n "$tags" ] || return 1
+  printf '%s\n' "$tags"
+}
+
 resolve_latest_version() {
-  tags_url="https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/tags?per_page=100"
-  tags_file="$TMP_DIR/tags.json"
+  tags_url=$(remote_refs_url)
 
   progress "Resolving latest OQTOPUS CLI version..."
-  if ! curl -fsSL "$tags_url" -o "$tags_file"; then
-    die "failed to query GitHub tags API: $tags_url"
-  fi
+  tags=$(fetch_remote_tags) || die "failed to query GitHub tags API: $tags_url"
 
-  tags_json=$(cat "$tags_file")
-  latest_version_from_tags "$tags_json" || die "could not resolve the latest stable version from GitHub tags."
+  latest_version_from_tags "$tags" || die "could not resolve the latest stable version from GitHub tags."
 }
 
 download_archive() {
