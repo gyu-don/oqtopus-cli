@@ -42,16 +42,47 @@ version_to_ref() {
   fi
 }
 
+remote_refs_url() {
+  printf 'https://github.com/%s.git/info/refs?service=git-upload-pack\n' "$1"
+}
+
+# Outputs "<sha> refs/..." lines for every ref the remote advertises. Must
+# not call die: this runs inside command substitution, where exit would
+# only terminate the subshell, so callers check the return code themselves.
+fetch_remote_refs() {
+  local repo=$1 tmp
+  tmp=$(mktemp)
+  if ! curl -fsSL "$(remote_refs_url "$repo")" -o "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  # The response is pkt-line framed and the first ref line embeds a NUL
+  # before the capability list; reading it via command substitution would
+  # make bash print "ignored null byte" to stderr, so it is read from a
+  # file and NULs are stripped before grep sees it.
+  LC_ALL=C tr -d '\0' < "$tmp" | LC_ALL=C grep -ao '[0-9a-f]\{40\} refs/[^ [:cntrl:]]*'
+  rm -f "$tmp"
+}
+
+# Outputs one tag name per line (annotated tags' peeled "^{}" entries removed).
+fetch_remote_tags() {
+  local repo=$1 tags
+  tags=$(fetch_remote_refs "$repo" \
+         | sed -n 's|^[0-9a-f]\{40\} refs/tags/||p' \
+         | grep -v '{}$' \
+         | sort -u) || return 1
+  [[ -n "$tags" ]] || return 1
+  printf '%s\n' "$tags"
+}
+
 resolve_latest_version() {
-  local repo=$1 tags_json latest
-  tags_json=$(curl -fsSL "https://api.github.com/repos/${repo}/tags?per_page=100") \
-    || die "failed to query GitHub tags API for $repo."
-  latest=$(jq -r \
-    '[.[].name as $t | $t
-      | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
-      | capture("^v(?<a>[0-9]+)\\.(?<b>[0-9]+)\\.(?<c>[0-9]+)$")
-      | {t: $t, a: (.a|tonumber), b: (.b|tonumber), c: (.c|tonumber)}]
-    | sort_by([.a, .b, .c]) | last | .t // empty' <<< "$tags_json")
+  local repo=$1 tags latest
+  tags=$(fetch_remote_tags "$repo") || die "failed to query GitHub tags API for $repo."
+  latest=$(printf '%s\n' "$tags" | jq -R -s -r \
+    'split("\n")
+      | map(select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))
+      | map(. as $t | capture("^v(?<a>[0-9]+)\\.(?<b>[0-9]+)\\.(?<c>[0-9]+)$") | {t: $t, a: (.a|tonumber), b: (.b|tonumber), c: (.c|tonumber)})
+      | sort_by([.a, .b, .c]) | last | .t // empty')
   [[ -n "$latest" ]] || die "no stable release found for $repo."
   printf '%s\n' "$latest"
 }
