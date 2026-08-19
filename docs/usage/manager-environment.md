@@ -74,7 +74,7 @@ not split into per-service subdirectories.
 - the installed manager version binding (`manager_version`).
 
 Do not move an environment directory after creating it. Manager commands check
-that the current directory matches the `env_root` recorded in `.metadata`.
+that the current directory matches the `environment_root` recorded in `.metadata`.
 
 ## `config/`
 

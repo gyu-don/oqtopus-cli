@@ -12,7 +12,7 @@ oqtopus backend device-status maintenance
 These commands operate on:
 
 ```text
-<env_root>/config/gateway/device_status
+<environment_root>/config/gateway/device_status
 ```
 
 ## Show Current Status

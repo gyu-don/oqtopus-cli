@@ -29,9 +29,9 @@ cd <env_name>
 oqtopus backend status
 ```
 
-## Current Directory Does Not Match `env_root`
+## Current Directory Does Not Match `environment_root`
 
-The current directory must match the `env_root` recorded in `.metadata`.
+The current directory must match the `environment_root` recorded in `.metadata`.
 
 This can happen if the environment directory was moved after creation. Create a
 new environment or move the directory back to its recorded path.
