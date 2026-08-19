@@ -308,10 +308,6 @@ component_repo() {
   esac
 }
 
-component_repo_url() {
-  printf 'https://github.com/%s.git\n' "$(component_repo "$1")"
-}
-
 component_binding_key() {
   printf '%s_version\n' "$1"
 }
@@ -388,22 +384,101 @@ try_load_backend_env() {
 }
 
 # -----------------------------------------------------------------------------
+# Remote ref discovery (git smart HTTP ref advertisement; no REST API, no git)
+# -----------------------------------------------------------------------------
+
+# jq expression: keep only "vX.Y.Z" tags and sort them ascending by version.
+STABLE_TAGS_JQ='
+  split("\n")
+  | map(select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))
+  | map(. as $tag
+        | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$")
+        | {tag: $tag, major: (.major|tonumber), minor: (.minor|tonumber), patch: (.patch|tonumber)})
+  | sort_by([.major, .minor, .patch])
+'
+
+remote_refs_url() {
+  printf 'https://github.com/%s.git/info/refs?service=git-upload-pack\n' "$1"
+}
+
+# Outputs "<sha> refs/..." lines for every ref the remote advertises.
+# Must not be invoked as `die` on failure: this runs inside command
+# substitution, so `die` would only terminate the subshell. Callers must
+# check the return code themselves.
+fetch_remote_refs() {
+  local repo=$1 tmp
+  tmp=$(mktemp)
+  if ! curl -fsSL "$(remote_refs_url "$repo")" -o "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  # The response is pkt-line framed and the first ref line embeds a NUL
+  # before the capability list; reading it via command substitution would
+  # make bash print "ignored null byte" to stderr, so it is read from a
+  # file and NULs are stripped before grep sees it.
+  LC_ALL=C tr -d '\0' < "$tmp" | LC_ALL=C grep -ao '[0-9a-f]\{40\} refs/[^ [:cntrl:]]*'
+  rm -f "$tmp"
+}
+
+# Outputs one tag name per line (annotated tags' peeled "^{}" entries removed).
+fetch_remote_tags() {
+  local repo=$1 tags
+  tags=$(fetch_remote_refs "$repo" \
+         | sed -n 's|^[0-9a-f]\{40\} refs/tags/||p' \
+         | grep -v '{}$' \
+         | sort -u) || return 1
+  [[ -n "$tags" ]] || return 1
+  printf '%s\n' "$tags"
+}
+
+# Resolves a branch name to its current commit SHA. Only refs/heads/ is
+# considered, so a tag name passed here fails (branch installs must name a
+# branch, not a tag).
+resolve_branch_commit() {
+  local repo=$1 branch=$2 escaped_branch sha
+  escaped_branch=$(printf '%s' "$branch" | sed -e 's/\\/\\\\/g' -e 's/[.[*^$]/\\&/g')
+  sha=$(fetch_remote_refs "$repo" \
+        | sed -n "s|^\\([0-9a-f]\\{40\\}\\) refs/heads/${escaped_branch}\$|\\1|p" \
+        | head -n 1) || return 1
+  [[ -n "$sha" ]] || return 1
+  printf '%s\n' "$sha"
+}
+
+# Downloads and extracts the tarball for a commit SHA into target_dir
+# (which is created if needed). The archive's single top-level directory is
+# stripped, leaving no .git metadata behind.
+download_commit_archive() {
+  local repo=$1 sha=$2 target_dir=$3
+  local tmp_dir archive url
+  need_command curl
+  need_command tar
+  url="https://github.com/${repo}/archive/${sha}.tar.gz"
+  tmp_dir=$(mktemp -d)
+  archive="$tmp_dir/source.tar.gz"
+  if ! curl -fsSL "$url" -o "$archive"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  mkdir -p "$target_dir"
+  if ! tar -xzf "$archive" -C "$target_dir" --strip-components=1; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  rm -rf "$tmp_dir"
+}
+
+# -----------------------------------------------------------------------------
 # Version resolution and component installation
 # -----------------------------------------------------------------------------
 
 resolve_latest_version() {
   local repo=$1
-  local tags_url tags_json tag_count latest
+  local tags_url tags latest
   need_command curl
   need_command jq
-  tags_url="https://api.github.com/repos/${repo}/tags?per_page=100"
-  tags_json=$(curl -fsSL "$tags_url") || die "failed to query GitHub tags API: $tags_url"
-  tag_count=$(jq 'length' <<< "$tags_json")
-  if [[ "$tag_count" == "100" ]]; then
-    warn "the GitHub tags API returned 100 tags."
-    warn "Additional tags may exist, so latest version resolution may be incomplete."
-  fi
-  latest=$(jq -r '[.[].name as $tag | $tag | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") | {tag: $tag, major: (.major | tonumber), minor: (.minor | tonumber), patch: (.patch | tonumber)}] | sort_by([.major, .minor, .patch]) | last | .tag // empty' <<< "$tags_json")
+  tags_url=$(remote_refs_url "$repo")
+  tags=$(fetch_remote_tags "$repo") || die "failed to query GitHub tags API: $tags_url"
+  latest=$(printf '%s\n' "$tags" | jq -R -s -r "$STABLE_TAGS_JQ | last | .tag // empty")
   [[ -n "$latest" ]] || die "could not resolve a latest stable version from GitHub tags for $repo."
   printf '%s\n' "$latest"
 }
@@ -418,21 +493,16 @@ cli_version() {
 
 list_component_versions() {
   local component=$1
-  local repo tags_url tags_json tag_count versions current_version binding_key version
+  local repo tags_url tags versions current_version binding_key version
   local have_backend_context=0
   local remote_versions installed_versions display_versions
   is_in_list "$component" "${INSTALL_COMPONENTS[@]}" || die "unknown component: $component"
   need_command curl
   need_command jq
   repo=$(component_repo "$component")
-  tags_url="https://api.github.com/repos/${repo}/tags?per_page=100"
-  tags_json=$(curl -fsSL "$tags_url") || die "failed to query GitHub tags API: $tags_url"
-  tag_count=$(jq 'length' <<< "$tags_json")
-  if [[ "$tag_count" == "100" ]]; then
-    warn "the GitHub tags API returned 100 tags."
-    warn "Additional tags may exist, so the version list may be incomplete."
-  fi
-  versions=$(jq -r '[.[].name as $tag | $tag | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") | {tag: $tag, major: (.major | tonumber), minor: (.minor | tonumber), patch: (.patch | tonumber)}] | sort_by([.major, .minor, .patch]) | reverse | .[].tag' <<< "$tags_json")
+  tags_url=$(remote_refs_url "$repo")
+  tags=$(fetch_remote_tags "$repo") || die "failed to query GitHub tags API: $tags_url"
+  versions=$(printf '%s\n' "$tags" | jq -R -s -r "$STABLE_TAGS_JQ | reverse | .[].tag")
   [[ -n "$versions" ]] || die "no stable versions found for $component."
   remote_versions="$versions"
   installed_versions=""
@@ -631,19 +701,21 @@ clone_and_sync_branch_component() {
   local component=$1
   local branch=$2
   local skip_sse_build=${3:-false}
-  local repo_url target_dir binding_key commit_sha version
+  local repo target_dir binding_key commit_sha version
   is_in_list "$component" "${INSTALL_COMPONENTS[@]}" || die "unknown component: $component"
-  need_command git
+  need_command curl
+  need_command tar
   need_command uv
-  repo_url=$(component_repo_url "$component")
+  repo=$(component_repo "$component")
   target_dir="$ENV_ROOT/$component"
   binding_key=$(component_binding_key "$component")
   if [[ -e "$target_dir" ]]; then
     log "Removing existing branch installation: $target_dir"
     rm -rf "$target_dir"
   fi
-  log "Cloning $component from branch '$branch'"
-  git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir" || die "failed to clone $component from branch '$branch'."
+  log "Downloading $component from branch '$branch'"
+  commit_sha=$(resolve_branch_commit "$repo" "$branch") || die "failed to resolve branch '$branch' for $component."
+  download_commit_archive "$repo" "$commit_sha" "$target_dir" || die "failed to download $component from branch '$branch'."
   version="branch:${branch}"
   sync_component_environment "$component" "$version" "$target_dir"
   if [[ "$component" == "engine" && "$skip_sse_build" == "true" ]]; then
@@ -1406,10 +1478,6 @@ cloud_local_component_repo() {
   esac
 }
 
-cloud_local_component_repo_url() {
-  printf 'https://github.com/%s.git\n' "$(cloud_local_component_repo "$1")"
-}
-
 cloud_local_component_binding_key() {
   printf 'cloud_local_%s_version\n' "$1"
 }
@@ -1474,21 +1542,16 @@ try_load_cloud_local_env() {
 
 list_cloud_local_component_versions() {
   local component=$1
-  local repo tags_url tags_json tag_count versions current_version binding_key version
+  local repo tags_url tags versions current_version binding_key version
   local have_env_context=0
   local remote_versions installed_versions display_versions
   is_in_list "$component" "${CLOUD_LOCAL_INSTALL_COMPONENTS[@]}" || die "unknown component: $component"
   need_command curl
   need_command jq
   repo=$(cloud_local_component_repo "$component")
-  tags_url="https://api.github.com/repos/${repo}/tags?per_page=100"
-  tags_json=$(curl -fsSL "$tags_url") || die "failed to query GitHub tags API: $tags_url"
-  tag_count=$(jq 'length' <<< "$tags_json")
-  if [[ "$tag_count" == "100" ]]; then
-    warn "the GitHub tags API returned 100 tags."
-    warn "Additional tags may exist, so the version list may be incomplete."
-  fi
-  versions=$(jq -r '[.[].name as $tag | $tag | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") | {tag: $tag, major: (.major | tonumber), minor: (.minor | tonumber), patch: (.patch | tonumber)}] | sort_by([.major, .minor, .patch]) | reverse | .[].tag' <<< "$tags_json")
+  tags_url=$(remote_refs_url "$repo")
+  tags=$(fetch_remote_tags "$repo") || die "failed to query GitHub tags API: $tags_url"
+  versions=$(printf '%s\n' "$tags" | jq -R -s -r "$STABLE_TAGS_JQ | reverse | .[].tag")
   [[ -n "$versions" ]] || die "no stable versions found for $component."
   remote_versions="$versions"
   installed_versions=""
@@ -1613,19 +1676,21 @@ install_cloud_local_component() {
 clone_and_sync_cloud_local_branch_component() {
   local component=$1
   local branch=$2
-  local repo_url target_dir binding_key version
+  local repo target_dir binding_key commit_sha version
   is_in_list "$component" "${CLOUD_LOCAL_INSTALL_COMPONENTS[@]}" || die "unknown component: $component"
-  need_command git
+  need_command curl
+  need_command tar
   need_command uv
-  repo_url=$(cloud_local_component_repo_url "$component")
+  repo=$(cloud_local_component_repo "$component")
   target_dir="$ENV_ROOT/$component"
   binding_key=$(cloud_local_component_binding_key "$component")
   if [[ -e "$target_dir" ]]; then
     log "Removing existing branch installation: $target_dir"
     rm -rf "$target_dir"
   fi
-  log "Cloning $component from branch '$branch'"
-  git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir" || die "failed to clone $component from branch '$branch'."
+  log "Downloading $component from branch '$branch'"
+  commit_sha=$(resolve_branch_commit "$repo" "$branch") || die "failed to resolve branch '$branch' for $component."
+  download_commit_archive "$repo" "$commit_sha" "$target_dir" || die "failed to download $component from branch '$branch'."
   version="branch:${branch}"
   sync_cloud_local_component_environment "$component" "$version" "$target_dir"
   metadata_set "$binding_key" "$version"
@@ -2265,19 +2330,14 @@ manager_install_complete() {
 # -----------------------------------------------------------------------------
 
 list_manager_versions() {
-  local tags_url tags_json tag_count versions current_version version
+  local tags_url tags versions current_version version
   local have_env_context=0
   local remote_versions installed_versions display_versions
   need_command curl
   need_command jq
-  tags_url="https://api.github.com/repos/${MANAGER_REPO}/tags?per_page=100"
-  tags_json=$(curl -fsSL "$tags_url") || die "failed to query GitHub tags API: $tags_url"
-  tag_count=$(jq 'length' <<< "$tags_json")
-  if [[ "$tag_count" == "100" ]]; then
-    warn "the GitHub tags API returned 100 tags."
-    warn "Additional tags may exist, so the version list may be incomplete."
-  fi
-  versions=$(jq -r '[.[].name as $tag | $tag | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") | {tag: $tag, major: (.major | tonumber), minor: (.minor | tonumber), patch: (.patch | tonumber)}] | sort_by([.major, .minor, .patch]) | reverse | .[].tag' <<< "$tags_json")
+  tags_url=$(remote_refs_url "$MANAGER_REPO")
+  tags=$(fetch_remote_tags "$MANAGER_REPO") || die "failed to query GitHub tags API: $tags_url"
+  versions=$(printf '%s\n' "$tags" | jq -R -s -r "$STABLE_TAGS_JQ | reverse | .[].tag")
   [[ -n "$versions" ]] || die "no stable versions found for manager."
   remote_versions="$versions"
   installed_versions=""
@@ -2381,17 +2441,18 @@ install_manager() {
 
 clone_and_sync_manager_branch() {
   local branch=$1
-  local repo_url target_dir version
-  need_command git
+  local target_dir commit_sha version
+  need_command curl
+  need_command tar
   need_command uv
-  repo_url="https://github.com/${MANAGER_REPO}.git"
   target_dir="$ENV_ROOT/manager"
   if [[ -e "$target_dir" ]]; then
     log "Removing existing branch installation: $target_dir"
     rm -rf "$target_dir"
   fi
-  log "Cloning manager from branch '$branch'"
-  git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir" || die "failed to clone manager from branch '$branch'."
+  log "Downloading manager from branch '$branch'"
+  commit_sha=$(resolve_branch_commit "$MANAGER_REPO" "$branch") || die "failed to resolve branch '$branch' for manager."
+  download_commit_archive "$MANAGER_REPO" "$commit_sha" "$target_dir" || die "failed to download manager from branch '$branch'."
   version="branch:${branch}"
   uv sync --frozen --no-dev --project "$target_dir" || die "failed to synchronize manager $version with uv."
   metadata_set manager_version "$version"
