@@ -63,25 +63,17 @@ Backend and cloud-local components are synchronized and launched with `uv`.
 
 Install `uv` before installing or starting components.
 
-## `git` Is Required For Branch Install (Backend)
-
-Installing a backend component from a branch requires `git`.
-
-If `git` is not installed, the following command fails:
-
-```bash
-oqtopus backend install engine branch:develop
-```
-
-Install `git`, then run the command again.
-
 ## Branch Name Not Found (Backend)
 
-If the specified branch does not exist in the remote repository, the clone
-fails with an error from `git`.
+If the specified branch does not exist in the remote repository, resolving it
+fails with an error such as:
 
-Check that the branch name is correct, then run the command again with the
-correct branch name:
+```text
+Error: failed to resolve branch 'develop' for engine.
+```
+
+`branch:<branch>` only accepts a branch name, not a tag. Check that the branch
+name is correct, then run the command again with the correct branch name:
 
 ```bash
 oqtopus backend install engine branch:<correct-branch>
@@ -147,16 +139,6 @@ write them according to the `logging.yaml` files under `config/`.
 For cloud-local environments, runtime stdout and stderr are written to
 `$ENV_ROOT/logs/<service>/service.log` for each service started in background
 mode.
-
-## `git` Is Required For Branch Install (Cloud-Local)
-
-Installing a cloud-local component from a branch requires `git`:
-
-```bash
-oqtopus cloud-local install cloud branch:develop
-```
-
-Install `git`, then run the command again.
 
 ## Docker Compose Is Required For Cloud-Local DB
 

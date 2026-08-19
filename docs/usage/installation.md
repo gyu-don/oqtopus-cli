@@ -73,14 +73,3 @@ To defer the `sse_runtime` build, use `--skip-sse-build` and build it later:
 oqtopus backend install engine --skip-sse-build
 oqtopus backend build sse-runtime
 ```
-
-### Git
-
-`git` is required when installing any component from a branch:
-
-```bash
-oqtopus cloud-local install cloud branch:develop
-oqtopus backend install engine branch:develop
-```
-
-`git` is not required for release installs.

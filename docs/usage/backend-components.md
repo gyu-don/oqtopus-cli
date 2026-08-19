@@ -126,17 +126,15 @@ This is intended for development and testing of pre-release features.
 
 Unlike a release install, a branch install:
 
-- Clones the repository with `git clone --depth 1` into `$ENV_ROOT/<component>/`
-  instead of the shared installation root.
-- Always removes the existing directory and re-clones on repeated runs, so you
-  always get the latest HEAD of the branch.
+- Downloads the branch's current commit as a tarball into
+  `$ENV_ROOT/<component>/` instead of the shared installation root.
+- Always removes the existing directory and re-downloads on repeated runs, so
+  you always get the latest HEAD of the branch.
 - Records the branch name in `.metadata`:
   `engine_version=branch:develop`
 
 `oqtopus backend start` automatically uses `$ENV_ROOT/<component>/` when a
 branch version is bound, with no additional configuration required.
-
-`git` must be installed to use this feature.
 
 To remove a branch install, run:
 
