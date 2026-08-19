@@ -270,6 +270,31 @@ metadata_unset() {
   mv "$tmp" "$file"
 }
 
+# Read a new-style key, falling back to its old-style name if absent.
+metadata_get_compat() {
+  local new_key=$1 old_key=$2 file=${3:-.metadata}
+  metadata_get "$new_key" "$file" 2>/dev/null && return 0
+  metadata_get "$old_key" "$file" 2>/dev/null
+}
+
+# Rewrite old-style env_root/env_name keys to their new names in place.
+# Best-effort: any failure (e.g. read-only file) leaves the file untouched
+# and this function still returns success.
+metadata_migrate_keys() {
+  local file=${1:-.metadata} value
+  [[ -f "$file" ]] || return 0
+  [[ -w "$file" ]] || return 0
+  if value=$(metadata_get env_root "$file" 2>/dev/null); then
+    metadata_set environment_root "$value" "$file" 2>/dev/null || return 0
+    metadata_unset env_root "$file" 2>/dev/null || return 0
+  fi
+  if value=$(metadata_get env_name "$file" 2>/dev/null); then
+    metadata_set environment_name "$value" "$file" 2>/dev/null || return 0
+    metadata_unset env_name "$file" 2>/dev/null || return 0
+  fi
+  return 0
+}
+
 line_list_contains() {
   local needle=$1
   local values=$2
@@ -356,12 +381,14 @@ engine_service_project() {
 validate_backend_env() {
   local current template metadata_env_root
   [[ -f .metadata ]] || die $'.metadata not found.\nThis directory is not an OQTOPUS backend environment.'
+  metadata_migrate_keys
   template=$(metadata_get template) || die "invalid .metadata: missing template."
   [[ "$template" == "backend" ]] || die "invalid environment template. Found template='$template', but 'oqtopus backend' requires template='backend'."
-  metadata_env_root=$(metadata_get env_root) || die "invalid .metadata: missing env_root."
+  metadata_env_root=$(metadata_get_compat environment_root env_root) \
+    || die "invalid .metadata: missing environment_root."
   current=$(pwd -P)
   if [[ "$metadata_env_root" != "$current" ]]; then
-    die $'Current directory does not match env_root.\n'"env_root = $metadata_env_root"$'\n'"current  = $current"
+    die $'Current directory does not match environment_root.\n'"environment_root = $metadata_env_root"$'\n'"current          = $current"
   fi
   ENV_ROOT="$metadata_env_root"
   INSTALL_ROOT=$(metadata_get install_root) || die "invalid .metadata: missing install_root."
@@ -375,7 +402,7 @@ try_load_backend_env() {
   [[ -f .metadata ]] || return 1
   template=$(metadata_get template 2>/dev/null) || return 1
   [[ "$template" == "backend" ]] || return 1
-  metadata_env_root=$(metadata_get env_root 2>/dev/null) || return 1
+  metadata_env_root=$(metadata_get_compat environment_root env_root) || return 1
   metadata_install_root=$(metadata_get install_root 2>/dev/null) || return 1
   current=$(pwd -P)
   [[ "$metadata_env_root" == "$current" ]] || return 1
@@ -813,8 +840,8 @@ cmd_init_backend() {
   cat > "$env_abs/.metadata" <<EOF
 template=backend
 install_root=$install_root
-env_name=$env_name
-env_root=$env_abs
+environment_name=$env_name
+environment_root=$env_abs
 created_at=$created_at
 EOF
   log "Created backend environment: $env_abs"
@@ -840,8 +867,8 @@ cmd_init_cloud_local() {
   cat > "$env_abs/.metadata" <<EOF
 template=cloud-local
 install_root=$install_root
-env_name=$env_name
-env_root=$env_abs
+environment_name=$env_name
+environment_root=$env_abs
 created_at=$created_at
 EOF
   log "Created cloud-local environment: $env_abs"
@@ -862,8 +889,8 @@ cmd_init_manager() {
   cat > "$env_abs/.metadata" <<EOF
 template=manager
 install_root=$install_root
-env_name=$env_name
-env_root=$env_abs
+environment_name=$env_name
+environment_root=$env_abs
 created_at=$created_at
 EOF
   log "Created manager environment: $env_abs"
@@ -1327,9 +1354,7 @@ cmd_backend_device_status() {
 
 cmd_backend_info() {
   validate_backend_env
-  log "=== Backend Info (.metadata) ==="
   cat .metadata
-  printf '\n'
 }
 
 # -----------------------------------------------------------------------------
@@ -1509,15 +1534,18 @@ cloud_local_component_install_complete() {
 validate_cloud_local_env() {
   local current template metadata_env_root
   [[ -f .metadata ]] || die $'.metadata not found.\nThis directory is not an OQTOPUS cloud-local environment.'
+  metadata_migrate_keys
   template=$(metadata_get template) || die "invalid .metadata: missing template."
   [[ "$template" == "cloud-local" ]] || die "invalid environment template. Found template='$template', but 'oqtopus cloud-local' requires template='cloud-local'."
-  metadata_env_root=$(metadata_get env_root) || die "invalid .metadata: missing env_root."
+  metadata_env_root=$(metadata_get_compat environment_root env_root) \
+    || die "invalid .metadata: missing environment_root."
   current=$(pwd -P)
   if [[ "$metadata_env_root" != "$current" ]]; then
-    die $'Current directory does not match env_root.\n'"env_root = $metadata_env_root"$'\n'"current  = $current"
+    die $'Current directory does not match environment_root.\n'"environment_root = $metadata_env_root"$'\n'"current          = $current"
   fi
   ENV_ROOT="$metadata_env_root"
-  ENV_NAME=$(metadata_get env_name) || die "invalid .metadata: missing env_name."
+  ENV_NAME=$(metadata_get_compat environment_name env_name) \
+    || die "invalid .metadata: missing environment_name."
   INSTALL_ROOT=$(metadata_get install_root) || die "invalid .metadata: missing install_root."
 }
 
@@ -1526,8 +1554,8 @@ try_load_cloud_local_env() {
   [[ -f .metadata ]] || return 1
   template=$(metadata_get template 2>/dev/null) || return 1
   [[ "$template" == "cloud-local" ]] || return 1
-  metadata_env_root=$(metadata_get env_root 2>/dev/null) || return 1
-  metadata_env_name=$(metadata_get env_name 2>/dev/null) || return 1
+  metadata_env_root=$(metadata_get_compat environment_root env_root) || return 1
+  metadata_env_name=$(metadata_get_compat environment_name env_name) || return 1
   metadata_install_root=$(metadata_get install_root 2>/dev/null) || return 1
   current=$(pwd -P)
   [[ "$metadata_env_root" == "$current" ]] || return 1
@@ -2144,9 +2172,7 @@ cmd_cloud_local_status() {
 
 cmd_cloud_local_info() {
   validate_cloud_local_env
-  log "=== Cloud-Local Info (.metadata) ==="
   cat .metadata
-  printf '\n'
 }
 
 # -----------------------------------------------------------------------------
@@ -2286,12 +2312,14 @@ EOF
 validate_manager_env() {
   local current template metadata_env_root
   [[ -f .metadata ]] || die $'.metadata not found.\nThis directory is not an OQTOPUS manager environment.'
+  metadata_migrate_keys
   template=$(metadata_get template) || die "invalid .metadata: missing template."
   [[ "$template" == "manager" ]] || die "invalid environment template. Found template='$template', but 'oqtopus manager' requires template='manager'."
-  metadata_env_root=$(metadata_get env_root) || die "invalid .metadata: missing env_root."
+  metadata_env_root=$(metadata_get_compat environment_root env_root) \
+    || die "invalid .metadata: missing environment_root."
   current=$(pwd -P)
   if [[ "$metadata_env_root" != "$current" ]]; then
-    die $'Current directory does not match env_root.\n'"env_root = $metadata_env_root"$'\n'"current  = $current"
+    die $'Current directory does not match environment_root.\n'"environment_root = $metadata_env_root"$'\n'"current          = $current"
   fi
   ENV_ROOT="$metadata_env_root"
   INSTALL_ROOT=$(metadata_get install_root) || die "invalid .metadata: missing install_root."
@@ -2302,7 +2330,7 @@ try_load_manager_env() {
   [[ -f .metadata ]] || return 1
   template=$(metadata_get template 2>/dev/null) || return 1
   [[ "$template" == "manager" ]] || return 1
-  metadata_env_root=$(metadata_get env_root 2>/dev/null) || return 1
+  metadata_env_root=$(metadata_get_compat environment_root env_root) || return 1
   metadata_install_root=$(metadata_get install_root 2>/dev/null) || return 1
   current=$(pwd -P)
   [[ "$metadata_env_root" == "$current" ]] || return 1
@@ -2678,9 +2706,7 @@ cmd_manager_status() {
 
 cmd_manager_info() {
   validate_manager_env
-  log "=== Manager Info (.metadata) ==="
   cat .metadata
-  printf '\n'
 }
 
 # -----------------------------------------------------------------------------

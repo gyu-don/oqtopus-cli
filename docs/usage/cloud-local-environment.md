@@ -67,7 +67,7 @@ Examples:
 - the installed component versions bound to this environment.
 
 Do not move an environment directory after creating it. Cloud-local commands
-check that the current directory matches the `env_root` recorded in `.metadata`.
+check that the current directory matches the `environment_root` recorded in `.metadata`.
 
 ## `config/`
 
