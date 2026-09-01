@@ -1,9 +1,0 @@
----
-source: tests/characterization/main.rs
-expression: output
----
-exit: 1
---- stdout ---
---- stderr ---
-Error: no stable versions found for tranqu.
---- end ---

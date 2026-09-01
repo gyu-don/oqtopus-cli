@@ -1,0 +1,9 @@
+---
+source: tests/characterization/versions.rs
+expression: output
+---
+exit: 0
+--- stdout ---
+oqtopus v1.0.99
+--- stderr ---
+--- end ---

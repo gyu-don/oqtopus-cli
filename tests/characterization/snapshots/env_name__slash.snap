@@ -1,0 +1,11 @@
+---
+source: tests/characterization/init.rs
+expression: output
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: invalid env_name 'a/b'.
+env_name must match: ^[a-z0-9][a-z0-9_.-]*$
+Use lowercase letters, digits, '.', '_' or '-', and start with a letter or digit.
+--- end ---

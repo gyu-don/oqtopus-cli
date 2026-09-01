@@ -1,0 +1,9 @@
+---
+source: tests/characterization/errors.rs
+expression: "context.run(args, 1)"
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: oqtopus backend info does not accept arguments.
+--- end ---

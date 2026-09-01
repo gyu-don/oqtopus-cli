@@ -1,0 +1,10 @@
+---
+source: tests/characterization/errors.rs
+expression: "context.run(args, 1)"
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: .metadata not found.
+This directory is not an OQTOPUS manager environment.
+--- end ---

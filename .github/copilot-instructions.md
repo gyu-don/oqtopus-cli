@@ -158,7 +158,7 @@ When working on any task, read these files first:
 
 1. `bin/oqtopus` — the entire CLI implementation (~2200 LOC Bash)
 2. `docs/usage/command-reference.md` — authoritative user-facing command reference
-3. `tests/characterization/main.rs` — observable Bash CLI behavior contract
+3. `tests/characterization/README.md` — how the observable-behavior contract (snapshot suite) works
 4. `templates/backend/config/` — config templates copied into user environments on `oqtopus init`
 5. `mkdocs.yml` — navigation structure of documentation site
 

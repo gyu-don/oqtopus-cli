@@ -1,0 +1,13 @@
+---
+source: tests/characterization/backend.rs
+expression: output
+---
+exit: 0
+--- stdout ---
+template=backend
+install_root=<TEST_ROOT>/xdg-data/oqtopus/backend/releases
+environment_name=demo
+environment_root=<TEST_ROOT>/work
+created_at=2031-12-13T14:15:16Z
+--- stderr ---
+--- end ---

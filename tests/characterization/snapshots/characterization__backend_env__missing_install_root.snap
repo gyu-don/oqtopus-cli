@@ -1,9 +1,0 @@
----
-source: tests/characterization/main.rs
-expression: output
----
-exit: 1
---- stdout ---
---- stderr ---
-Error: invalid .metadata: missing install_root.
---- end ---

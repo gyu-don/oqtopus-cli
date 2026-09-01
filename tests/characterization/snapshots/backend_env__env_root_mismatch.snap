@@ -1,0 +1,11 @@
+---
+source: tests/characterization/backend.rs
+expression: output
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: Current directory does not match environment_root.
+environment_root = <TEST_ROOT>/elsewhere
+current          = <TEST_ROOT>/work
+--- end ---

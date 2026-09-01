@@ -1,9 +1,0 @@
----
-source: tests/characterization/main.rs
-expression: output
----
-exit: 0
---- stdout ---
-Created backend environment: <TEST_ROOT>/work/demo
---- stderr ---
---- end ---

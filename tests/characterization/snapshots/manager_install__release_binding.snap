@@ -1,0 +1,20 @@
+---
+source: tests/characterization/manager.rs
+expression: "render_observation(&context, &output, &[\".metadata\"])"
+---
+exit: 0
+--- stdout ---
+Installing manager v1.2.3
+Bound manager_version=v1.2.3
+--- stderr ---
+--- filesystem ---
+.metadata
+--- selected files ---
+--- .metadata ---
+template=manager
+install_root=<TEST_ROOT>/xdg-data/oqtopus/manager/releases
+environment_name=demo
+environment_root=<TEST_ROOT>/work
+created_at=2031-12-13T14:15:16Z
+manager_version=v1.2.3
+--- end ---

@@ -1,0 +1,5 @@
+---
+source: tests/characterization/backend.rs
+expression: "normalize(&context.fake_tools.log(), context.root())"
+---
+{"tool":"docker","ordinal":1,"argv":["docker","build","<TEST_ROOT>/xdg-data/oqtopus/backend/releases/engine-v1.2.3/sse_runtime","-t","img:1","--build-arg","UID=<ID>","--build-arg","GID=<ID>"],"cwd":"<TEST_ROOT>/work","env":{"HOME":"<TEST_ROOT>/home","XDG_CONFIG_HOME":"<TEST_ROOT>/xdg-config","XDG_DATA_HOME":"<TEST_ROOT>/xdg-data","OQTOPUS_CLI_VERSION":"9.8.7-characterization"}}

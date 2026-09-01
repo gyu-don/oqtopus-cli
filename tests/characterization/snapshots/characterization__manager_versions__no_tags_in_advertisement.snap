@@ -1,9 +1,0 @@
----
-source: tests/characterization/main.rs
-expression: output
----
-exit: 1
---- stdout ---
---- stderr ---
-Error: failed to query GitHub tags API: https://github.com/oqtopus-team/oqtopus-manager.git/info/refs?service=git-upload-pack
---- end ---

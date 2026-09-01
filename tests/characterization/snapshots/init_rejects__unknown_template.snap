@@ -1,0 +1,13 @@
+---
+source: tests/characterization/init.rs
+expression: "render_observation(&context, &output, &[])"
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: template 'nonexistent' is not implemented.
+--- filesystem ---
+<EMPTY>
+--- selected files ---
+<NONE>
+--- end ---

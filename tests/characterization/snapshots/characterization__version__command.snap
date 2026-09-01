@@ -1,9 +1,0 @@
----
-source: tests/characterization/main.rs
-expression: output
----
-exit: 0
---- stdout ---
-oqtopus 9.8.7-characterization
---- stderr ---
---- end ---

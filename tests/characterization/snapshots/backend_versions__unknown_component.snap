@@ -1,0 +1,9 @@
+---
+source: tests/characterization/versions.rs
+expression: output
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: unknown component: bogus
+--- end ---

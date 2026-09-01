@@ -1,0 +1,10 @@
+---
+source: tests/characterization/manager.rs
+expression: output
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: .metadata not found.
+This directory is not an OQTOPUS manager environment.
+--- end ---

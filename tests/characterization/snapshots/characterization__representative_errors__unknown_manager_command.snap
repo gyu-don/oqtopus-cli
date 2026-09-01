@@ -1,9 +1,0 @@
----
-source: tests/characterization/main.rs
-expression: "context.run(args, 1)"
----
-exit: 1
---- stdout ---
---- stderr ---
-Error: unknown manager command: unknown
---- end ---

@@ -1,0 +1,7 @@
+---
+source: tests/characterization/manager.rs
+expression: "normalize(&context.fake_tools.log(), context.root())"
+---
+{"tool":"curl","ordinal":1,"argv":["curl","-fsSL","https://github.com/oqtopus-team/oqtopus-manager.git/info/refs?service=git-upload-pack","-o","<TEST_ROOT>/tmp/<TEMP_DIR>"],"cwd":"<TEST_ROOT>/work","env":{"HOME":"<TEST_ROOT>/home","XDG_CONFIG_HOME":"<TEST_ROOT>/xdg-config","XDG_DATA_HOME":"<TEST_ROOT>/xdg-data","OQTOPUS_CLI_VERSION":"9.8.7-characterization"}}
+{"tool":"curl","ordinal":2,"argv":["curl","-fsSL","https://github.com/oqtopus-team/oqtopus-manager/archive/726566732f68656164732f646576656c6f707265.tar.gz","-o","<TEST_ROOT>/tmp/<TEMP_DIR>/source.tar.gz"],"cwd":"<TEST_ROOT>/work","env":{"HOME":"<TEST_ROOT>/home","XDG_CONFIG_HOME":"<TEST_ROOT>/xdg-config","XDG_DATA_HOME":"<TEST_ROOT>/xdg-data","OQTOPUS_CLI_VERSION":"9.8.7-characterization"}}
+{"tool":"uv","ordinal":1,"argv":["uv","sync","--frozen","--no-dev","--project","<TEST_ROOT>/work/manager"],"cwd":"<TEST_ROOT>/work","env":{"HOME":"<TEST_ROOT>/home","XDG_CONFIG_HOME":"<TEST_ROOT>/xdg-config","XDG_DATA_HOME":"<TEST_ROOT>/xdg-data","OQTOPUS_CLI_VERSION":"9.8.7-characterization"}}

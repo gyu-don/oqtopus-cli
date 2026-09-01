@@ -1,0 +1,9 @@
+---
+source: tests/characterization/init.rs
+expression: output
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: template 'nonexistent' is not implemented.
+--- end ---

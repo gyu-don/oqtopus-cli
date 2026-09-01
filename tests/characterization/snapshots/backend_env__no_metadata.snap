@@ -1,0 +1,10 @@
+---
+source: tests/characterization/backend.rs
+expression: output
+---
+exit: 1
+--- stdout ---
+--- stderr ---
+Error: .metadata not found.
+This directory is not an OQTOPUS backend environment.
+--- end ---
