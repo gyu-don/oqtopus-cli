@@ -338,6 +338,11 @@ impl EnvFixture {
         Self::create(context, "backend", "backend", extra)
     }
 
+    /// Writes `.metadata` for a `manager` environment into the work directory.
+    fn manager(context: &TestContext, extra: &[(&str, &str)]) -> Self {
+        Self::create(context, "manager", "manager", extra)
+    }
+
     fn create(
         context: &TestContext,
         template: &str,
@@ -535,6 +540,14 @@ fn command_help() {
         ("backend_stop", vec!["backend", "stop"]),
         ("backend_restart", vec!["backend", "restart"]),
         ("backend_device_status", vec!["backend", "device-status"]),
+        ("manager", vec!["manager"]),
+        ("manager_install", vec!["manager", "install"]),
+        ("manager_versions", vec!["manager", "versions"]),
+        ("manager_uninstall", vec!["manager", "uninstall"]),
+        ("manager_update", vec!["manager", "update"]),
+        ("manager_start", vec!["manager", "start"]),
+        ("manager_stop", vec!["manager", "stop"]),
+        ("manager_restart", vec!["manager", "restart"]),
         ("cloud_local_install", vec!["cloud-local", "install"]),
         ("cloud_local_versions", vec!["cloud-local", "versions"]),
         ("cloud_local_uninstall", vec!["cloud-local", "uninstall"]),
@@ -563,7 +576,7 @@ fn command_help() {
 
 #[test]
 fn dispatcher_without_arguments_prints_help() {
-    for command in ["backend", "cloud-local"] {
+    for command in ["backend", "cloud-local", "manager"] {
         let help_context = TestContext::new();
         let help_output = help_context.run([command, "help"], 0);
 
@@ -606,6 +619,7 @@ fn representative_errors() {
             "unknown_cloud_local_command",
             vec!["cloud-local", "unknown"],
         ),
+        ("unknown_manager_command", vec!["manager", "unknown"]),
         (
             "unsupported_completion_shell",
             vec!["completion", "powershell"],
@@ -623,6 +637,26 @@ fn representative_errors() {
         (
             "init_extra_argument",
             vec!["init", "demo", "--template", "backend", "extra"],
+        ),
+        (
+            "init_branch_flag_without_value",
+            vec!["init", "demo", "--template", "backend", "--branch"],
+        ),
+        (
+            "manager_status_outside_environment",
+            vec!["manager", "status"],
+        ),
+        (
+            "manager_status_extra_argument",
+            vec!["manager", "status", "extra"],
+        ),
+        (
+            "manager_info_extra_argument",
+            vec!["manager", "info", "extra"],
+        ),
+        (
+            "manager_versions_extra_argument",
+            vec!["manager", "versions", "extra"],
         ),
         ("backend_versions_no_arguments", vec!["backend", "versions"]),
         (
@@ -1171,4 +1205,300 @@ fn init_validates_env_name_boundaries() {
         let output = context.run(["init", env_name, "--template", "nonexistent"], 1);
         insta::assert_snapshot!(snapshot_name, output);
     }
+}
+
+// ---------------------------------------------------------------------------
+// `oqtopus manager` — environment validation, info, status
+// ---------------------------------------------------------------------------
+
+#[test]
+fn manager_info_reports_metadata_verbatim() {
+    let context = TestContext::new();
+    EnvFixture::manager(&context, &[]);
+
+    let output = context.run(["manager", "info"], 0);
+
+    insta::assert_snapshot!("manager_info__metadata", output);
+}
+
+#[test]
+fn manager_environment_validation_errors() {
+    // No `.metadata` at all.
+    {
+        let context = TestContext::new();
+        let output = context.run(["manager", "info"], 1);
+        insta::assert_snapshot!("manager_env__no_metadata", output);
+    }
+
+    // `.metadata` exists but belongs to a different template.
+    {
+        let context = TestContext::new();
+        EnvFixture::backend(&context, &[]);
+        let output = context.run(["manager", "info"], 1);
+        insta::assert_snapshot!("manager_env__wrong_template", output);
+    }
+}
+
+#[test]
+fn manager_status_reports_stopped_without_pid_file() {
+    let context = TestContext::new();
+    EnvFixture::manager(&context, &[]);
+
+    let output = context.run(["manager", "status"], 0);
+
+    insta::assert_snapshot!("manager_status__stopped", output);
+}
+
+// ---------------------------------------------------------------------------
+// `oqtopus manager versions`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn manager_versions_lists_remote_tags_outside_an_environment() {
+    let context = TestContext::new();
+    context
+        .fake_tools
+        .fixture("curl")
+        .stdout(advertised_tags(&["v1.2.3", "v2.0.0", "v1.10.0", "nightly"]));
+
+    let output = context.run(["manager", "versions"], 0);
+    assert_eq!(context.fake_tools.call_count("curl"), 1);
+
+    insta::assert_snapshot!("manager_versions__outside_environment", output);
+}
+
+#[test]
+fn manager_versions_annotates_environment_context() {
+    let tags = advertised_tags(&["v1.2.3", "v2.0.0", "v1.10.0", "nightly"]);
+
+    // The current binding is the only difference between the two cases: it
+    // moves the `* ` marker, and a branch binding sorts ahead of every tag.
+    for (name, manager_version) in [
+        ("manager_versions__current_release", "v1.10.0"),
+        ("manager_versions__current_branch", "branch:feature/x"),
+    ] {
+        let context = TestContext::new();
+        let env = EnvFixture::manager(&context, &[("manager_version", manager_version)]);
+        for release in [
+            "manager-v1.2.3",
+            "manager-v1.10.0",
+            "manager-v3.3.3",
+            "manager-vfoo",
+        ] {
+            env.install_release(release);
+        }
+        context.fake_tools.fixture("curl").stdout(&tags);
+
+        let output = context.run(["manager", "versions"], 0);
+        assert_eq!(context.fake_tools.call_count("curl"), 1);
+
+        insta::assert_snapshot!(name, output);
+    }
+}
+
+#[test]
+fn manager_versions_fail_when_the_advertisement_has_no_tags() {
+    // The remote answers, but advertises no tag refs at all. The CLI folds
+    // this into the same error as a failed fetch.
+    let context = TestContext::new();
+    context
+        .fake_tools
+        .fixture("curl")
+        .stdout(advertised_refs(&[]));
+
+    let output = context.run(["manager", "versions"], 1);
+
+    insta::assert_snapshot!("manager_versions__no_tags_in_advertisement", output);
+}
+
+// ---------------------------------------------------------------------------
+// `oqtopus manager install / update / uninstall`
+// ---------------------------------------------------------------------------
+
+/// A minimal oqtopus-manager source checkout, as codeload would deliver it.
+fn build_manager_checkout_archive(root: &Path, top_level: &str) -> Vec<u8> {
+    build_targz(root, top_level, |contents| {
+        fs::write(
+            contents.join("pyproject.toml"),
+            "[project]\nname = \"oqtopus-manager\"\n",
+        )
+        .expect("write manager pyproject fixture");
+    })
+}
+
+#[test]
+fn manager_install_release_downloads_the_tag_archive() {
+    let context = TestContext::new();
+    let env = EnvFixture::manager(&context, &[]);
+    // A pinned release install skips ref resolution: the only curl call is
+    // the tag tarball itself.
+    let checkout = build_manager_checkout_archive(context.root(), "oqtopus-manager-1.2.3");
+    context.fake_tools.fixture_call("curl", 1).stdout(checkout);
+    context.fake_tools.fixture("uv");
+
+    let output = context.run(["manager", "install", "v1.2.3"], 0);
+    assert_eq!(context.fake_tools.call_count("curl"), 1);
+
+    let release = env.install_root.join("manager-v1.2.3");
+    assert!(
+        release.join("pyproject.toml").is_file(),
+        "release archive should be extracted with its top-level directory stripped"
+    );
+    assert!(
+        release.join(".venv").is_dir(),
+        "uv sync should be pointed at the extracted release"
+    );
+
+    if context.invoke_with_bash {
+        insta::assert_snapshot!(
+            "bash_external_calls__manager_install_release",
+            normalize(&context.fake_tools.log(), context.root())
+        );
+    }
+
+    insta::assert_snapshot!(
+        "manager_install__release_binding",
+        render_observation(&context, &output, &[".metadata"])
+    );
+}
+
+#[test]
+fn manager_install_branch_writes_metadata_binding() {
+    let context = TestContext::new();
+    EnvFixture::manager(&context, &[]);
+    // A branch install makes two curl calls: the ref advertisement resolving
+    // the branch to a commit id, then the codeload tarball for that commit.
+    context
+        .fake_tools
+        .fixture_call("curl", 1)
+        .stdout(advertised_refs(&["heads/develop"]));
+    let checkout = build_manager_checkout_archive(context.root(), "oqtopus-manager-checkout");
+    context.fake_tools.fixture_call("curl", 2).stdout(checkout);
+    context.fake_tools.fixture("uv");
+
+    let output = context.run(["manager", "install", "branch:develop"], 0);
+    assert_eq!(context.fake_tools.call_count("curl"), 2);
+
+    if context.invoke_with_bash {
+        insta::assert_snapshot!(
+            "bash_external_calls__manager_install_branch",
+            normalize(&context.fake_tools.log(), context.root())
+        );
+    }
+
+    insta::assert_snapshot!(
+        "manager_install__branch_binding",
+        render_observation(&context, &output, &[".metadata"])
+    );
+}
+
+#[test]
+fn manager_update_resolves_and_installs_the_latest_release() {
+    let context = TestContext::new();
+    EnvFixture::manager(&context, &[("manager_version", "v1.2.3")]);
+    // `update` takes no version argument: the first curl call resolves the
+    // latest stable tag, the second downloads that tag's tarball.
+    context
+        .fake_tools
+        .fixture_call("curl", 1)
+        .stdout(advertised_tags(&["v1.2.3", "v1.10.0", "v1.9.9"]));
+    let checkout = build_manager_checkout_archive(context.root(), "oqtopus-manager-1.10.0");
+    context.fake_tools.fixture_call("curl", 2).stdout(checkout);
+    context.fake_tools.fixture("uv");
+
+    let output = context.run(["manager", "update"], 0);
+    assert_eq!(context.fake_tools.call_count("curl"), 2);
+
+    insta::assert_snapshot!(
+        "manager_update__rebinds_to_latest",
+        render_observation(&context, &output, &[".metadata"])
+    );
+}
+
+#[test]
+fn manager_uninstall_branch_clears_metadata_binding() {
+    let context = TestContext::new();
+    EnvFixture::manager(&context, &[("manager_version", "branch:main")]);
+    fs::create_dir_all(context.work_dir().join("manager")).expect("create manager branch checkout");
+
+    let output = context.run(["manager", "uninstall", "branch:main"], 0);
+
+    insta::assert_snapshot!(
+        "manager_uninstall__branch_binding",
+        render_observation(&context, &output, &[".metadata"])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `oqtopus init` — the --branch flag and the manager template
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_branch_flag_downloads_the_template_from_that_branch() {
+    let context = TestContext::new();
+    let archive = build_backend_template_archive(context.root());
+    context.fake_tools.fixture("curl").stdout(&archive);
+    context
+        .fake_tools
+        .fixture("date")
+        .stdout("2031-12-13T14:15:16Z\n");
+
+    let output = context.run(
+        [
+            "init",
+            "demo",
+            "--template",
+            "backend",
+            "--branch",
+            "feature/x",
+        ],
+        0,
+    );
+
+    if context.invoke_with_bash {
+        // The recorded URL is the observable effect of --branch.
+        insta::assert_snapshot!(
+            "bash_external_calls__init_backend_branch",
+            normalize(&context.fake_tools.log(), context.root())
+        );
+    }
+
+    insta::assert_snapshot!("init_backend__branch_flag", output);
+}
+
+fn build_manager_template_archive(root: &Path) -> Vec<u8> {
+    build_targz(root, "oqtopus-cli-main", |contents| {
+        let template = contents.join("templates/manager");
+        fs::create_dir_all(template.join("config"))
+            .expect("create manager template fixture directories");
+        fs::write(
+            template.join("config/config.yaml"),
+            "manager:\n  port: 8080\n",
+        )
+        .expect("write manager config fixture");
+        fs::write(template.join("config/logging.yaml"), "version: 1\n")
+            .expect("write manager logging fixture");
+    })
+}
+
+#[test]
+fn init_manager_creates_environment() {
+    let context = TestContext::new();
+    let archive = build_manager_template_archive(context.root());
+    context.fake_tools.fixture("curl").stdout(&archive);
+    context
+        .fake_tools
+        .fixture("date")
+        .stdout("2031-12-13T14:15:16Z\n");
+
+    let output = context.run(["init", "demo", "--template", "manager"], 0);
+
+    insta::assert_snapshot!(
+        "init_manager_creates_environment",
+        render_observation(
+            &context,
+            &output,
+            &["demo/.metadata", "demo/config/config.yaml"],
+        )
+    );
 }

@@ -1,0 +1,10 @@
+---
+source: tests/characterization/main.rs
+expression: "&help_output"
+---
+exit: 0
+--- stdout ---
+Usage:
+  oqtopus manager stop
+--- stderr ---
+--- end ---
