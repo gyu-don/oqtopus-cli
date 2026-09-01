@@ -6,6 +6,4 @@ exit: 0
 --- stdout ---
 oqtopus v1.0.99
 --- stderr ---
-Warning: the GitHub tags API returned 100 tags.
-Warning: Additional tags may exist, so latest version resolution may be incomplete.
 --- end ---

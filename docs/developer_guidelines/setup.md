@@ -85,7 +85,7 @@ OQTOPUS_TEST_BIN="/absolute/path/to/rust-oqtopus" \
 Use an absolute path so tests continue to find the executable after changing into a
 temporary fixture directory.
 
-External commands the CLI shells out to (`curl`, `date`, `docker`, `git`, and `uv`) are
+External commands the CLI shells out to (`curl`, `date`, `docker`, and `uv`) are
 replaced by fake executables on `PATH` during tests. Each fake tool call is matched
 against a configured fixture; a call with no fixture configured fails immediately with
 exit code 125, so a test can never succeed implicitly by falling through to a real

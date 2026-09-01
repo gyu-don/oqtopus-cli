@@ -28,8 +28,8 @@ demo/sse_work/
 --- demo/.metadata ---
 template=backend
 install_root=<TEST_ROOT>/xdg-data/oqtopus/backend/releases
-env_name=demo
-env_root=<TEST_ROOT>/work/demo
+environment_name=demo
+environment_root=<TEST_ROOT>/work/demo
 created_at=2031-12-13T14:15:16Z
 --- demo/config/.env ---
 ENV_NAME=demo

@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const TOOLS: &[&str] = &["curl", "date", "docker", "git", "uv"];
+const TOOLS: &[&str] = &["curl", "date", "docker", "uv"];
 
 /// An isolated PATH directory, fixture tree, state tree, and JSONL invocation log.
 pub struct FakeTools {
@@ -77,6 +77,15 @@ impl FakeTools {
     pub fn fixture(&self, tool: &str) -> Fixture {
         self.assert_tool(tool);
         Fixture::new(self.fixtures.join(tool))
+    }
+
+    /// Configures the response for the `ordinal`-th call to `tool` (1-based).
+    /// A per-call response takes precedence over the tool's fallback response,
+    /// so a test can give curl a ref advertisement on the first call and a
+    /// tarball on the second.
+    pub fn fixture_call(&self, tool: &str, ordinal: u64) -> Fixture {
+        self.assert_tool(tool);
+        Fixture::new(self.fixtures.join(tool).join(format!("call-{ordinal}")))
     }
 
     pub fn log(&self) -> String {

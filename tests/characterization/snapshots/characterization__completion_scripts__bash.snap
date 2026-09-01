@@ -64,8 +64,28 @@ _oqtopus()
           ;;
       esac
       ;;
+    manager)
+      case "${COMP_WORDS[2]}" in
+        install|versions|update|uninstall)
+          COMPREPLY=( $(compgen -W "help --help" -- "$cur") )
+          return 0
+          ;;
+        start)
+          COMPREPLY=( $(compgen -W "--foreground help --help" -- "$cur") )
+          return 0
+          ;;
+        stop|restart)
+          COMPREPLY=( $(compgen -W "help --help" -- "$cur") )
+          return 0
+          ;;
+        *)
+          COMPREPLY=( $(compgen -W "install versions uninstall update start stop restart status info help --help" -- "$cur") )
+          return 0
+          ;;
+      esac
+      ;;
     init)
-      COMPREPLY=( $(compgen -W "--template backend cloud-local help --help" -- "$cur") )
+      COMPREPLY=( $(compgen -W "--template --branch backend cloud-local manager help --help" -- "$cur") )
       return 0
       ;;
     completion)
@@ -73,7 +93,7 @@ _oqtopus()
       return 0
       ;;
     *)
-      COMPREPLY=( $(compgen -W "init backend cloud-local completion version help --help --version" -- "$cur") )
+      COMPREPLY=( $(compgen -W "init backend cloud-local manager completion version help --help --version" -- "$cur") )
       return 0
       ;;
   esac

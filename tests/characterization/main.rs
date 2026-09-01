@@ -324,6 +324,12 @@ struct EnvFixture {
     install_root: PathBuf,
 }
 
+/// Which generation of `.metadata` key names a fixture is written with.
+enum KeyStyle {
+    Current,
+    Legacy,
+}
+
 impl EnvFixture {
     /// Writes `.metadata` for a `backend` environment into the work directory.
     /// `extra` lines are appended in the given order, so a caller can control
@@ -338,6 +344,27 @@ impl EnvFixture {
         data_dir: &str,
         extra: &[(&str, &str)],
     ) -> Self {
+        Self::create_with_key_style(context, template, data_dir, extra, KeyStyle::Current)
+    }
+
+    /// Like `create`, but written with the pre-rename `env_name`/`env_root`
+    /// keys that environments created by older CLI releases still carry.
+    fn create_legacy(
+        context: &TestContext,
+        template: &str,
+        data_dir: &str,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        Self::create_with_key_style(context, template, data_dir, extra, KeyStyle::Legacy)
+    }
+
+    fn create_with_key_style(
+        context: &TestContext,
+        template: &str,
+        data_dir: &str,
+        extra: &[(&str, &str)],
+        key_style: KeyStyle,
+    ) -> Self {
         let env_root = context.work_dir();
         // Mirrors data_root()/cloud_local_data_root() under the harness's XDG_DATA_HOME.
         let install_root = context
@@ -348,8 +375,12 @@ impl EnvFixture {
         fs::create_dir_all(&env_root).expect("create the environment root");
         fs::create_dir_all(&install_root).expect("create the install root");
 
+        let (name_key, root_key) = match key_style {
+            KeyStyle::Current => ("environment_name", "environment_root"),
+            KeyStyle::Legacy => ("env_name", "env_root"),
+        };
         let mut metadata = format!(
-            "template={template}\ninstall_root={}\nenv_name=demo\nenv_root={}\ncreated_at=2031-12-13T14:15:16Z\n",
+            "template={template}\ninstall_root={}\n{name_key}=demo\n{root_key}={}\ncreated_at=2031-12-13T14:15:16Z\n",
             install_root.display(),
             env_root.display()
         );
@@ -370,35 +401,110 @@ impl EnvFixture {
     }
 }
 
-fn build_backend_template_archive(root: &Path) -> Vec<u8> {
+/// Packs `<root>/archive-source/<top_level>` (which `populate` must fill in)
+/// into a gzipped tarball, as GitHub's codeload archives are shaped: a single
+/// top-level directory wrapping the repository contents.
+fn build_targz(root: &Path, top_level: &str, populate: impl FnOnce(&Path)) -> Vec<u8> {
     let source = root.join("archive-source");
-    let template = source.join("oqtopus-cli-main/templates/backend");
-    fs::create_dir_all(template.join("config/nested"))
-        .expect("create backend template fixture directories");
-    fs::write(
-        template.join("config/.env"),
-        "ENV_NAME={{ env_name }}\nAPI_URL=http://{{ env_name }}.example.test\n",
-    )
-    .expect("write backend environment template fixture");
-    fs::write(
-        template.join("config/nested/backend.toml"),
-        "mode = \"fixture\"\n",
-    )
-    .expect("write nested backend fixture");
-    fs::write(template.join("compose.yaml"), "name: characterization\n")
-        .expect("write backend compose fixture");
+    let contents = source.join(top_level);
+    fs::create_dir_all(&contents).expect("create archive fixture directory");
+    populate(&contents);
 
-    let archive = root.join("backend-template.tar.gz");
+    let archive = root.join("fixture-archive.tar.gz");
     let status = StdCommand::new("tar")
         .args(["-czf"])
         .arg(&archive)
         .args(["-C"])
         .arg(&source)
-        .arg("oqtopus-cli-main")
+        .arg(top_level)
         .status()
-        .expect("run tar to build local backend template fixture");
-    assert!(status.success(), "tar failed to build template fixture");
-    fs::read(archive).expect("read backend template fixture archive")
+        .expect("run tar to build archive fixture");
+    assert!(status.success(), "tar failed to build archive fixture");
+    fs::remove_dir_all(&source).expect("remove archive fixture source");
+    fs::read(archive).expect("read archive fixture")
+}
+
+fn build_backend_template_archive(root: &Path) -> Vec<u8> {
+    build_targz(root, "oqtopus-cli-main", |contents| {
+        let template = contents.join("templates/backend");
+        fs::create_dir_all(template.join("config/nested"))
+            .expect("create backend template fixture directories");
+        fs::write(
+            template.join("config/.env"),
+            "ENV_NAME={{ env_name }}\nAPI_URL=http://{{ env_name }}.example.test\n",
+        )
+        .expect("write backend environment template fixture");
+        fs::write(
+            template.join("config/nested/backend.toml"),
+            "mode = \"fixture\"\n",
+        )
+        .expect("write nested backend fixture");
+        fs::write(template.join("compose.yaml"), "name: characterization\n")
+            .expect("write backend compose fixture");
+    })
+}
+
+/// A fabricated 40-hex object id that is stable per ref name, so snapshots are
+/// deterministic and a recorded id can be traced back to the ref it stands for.
+fn fake_commit_id(refname: &str) -> String {
+    let mut id = String::with_capacity(40);
+    for byte in refname.bytes().cycle() {
+        id.push_str(&format!("{byte:02x}"));
+        if id.len() >= 40 {
+            break;
+        }
+    }
+    id.truncate(40);
+    id
+}
+
+/// Renders the response body of `GET <repo>.git/info/refs?service=git-upload-pack`,
+/// which the CLI's tag listing and branch resolution parse. The framing follows
+/// a real git smart-HTTP server: pkt-line length prefixes, a `# service`
+/// preamble, a NUL-separated capability list on the first ref line, and flush
+/// packets — all of which the CLI's parser must tolerate.
+fn upload_pack_advertisement(refs: &[(String, String)]) -> Vec<u8> {
+    fn pkt_line(payload: &[u8]) -> Vec<u8> {
+        let mut line = format!("{:04x}", payload.len() + 4).into_bytes();
+        line.extend_from_slice(payload);
+        line
+    }
+
+    let mut body = pkt_line(b"# service=git-upload-pack\n");
+    body.extend_from_slice(b"0000");
+    for (index, (commit_id, refname)) in refs.iter().enumerate() {
+        let mut payload = format!("{commit_id} {refname}").into_bytes();
+        if index == 0 {
+            payload.extend_from_slice(b"\0multi_ack symref=HEAD:refs/heads/main agent=git/fixture");
+        }
+        payload.push(b'\n');
+        body.extend_from_slice(&pkt_line(&payload));
+    }
+    body.extend_from_slice(b"0000");
+    body
+}
+
+/// An advertisement carrying HEAD, `refs/heads/main`, and the given refs
+/// (`heads/...` or `tags/...`), with fabricated per-ref commit ids.
+fn advertised_refs(refs: &[&str]) -> Vec<u8> {
+    let mut lines = vec![
+        (fake_commit_id("refs/heads/main"), "HEAD".to_owned()),
+        (
+            fake_commit_id("refs/heads/main"),
+            "refs/heads/main".to_owned(),
+        ),
+    ];
+    for name in refs {
+        let refname = format!("refs/{name}");
+        lines.push((fake_commit_id(&refname), refname));
+    }
+    upload_pack_advertisement(&lines)
+}
+
+/// An advertisement whose only interesting refs are the given tags.
+fn advertised_tags(tags: &[&str]) -> Vec<u8> {
+    let refs: Vec<String> = tags.iter().map(|tag| format!("tags/{tag}")).collect();
+    advertised_refs(&refs.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 #[test]
@@ -566,18 +672,21 @@ fn init_rejects_invalid_requests_without_side_effects() {
 #[test]
 fn backend_versions_filters_and_sorts_stable_semver_tags() {
     let context = TestContext::new();
-    let tags = r#"[
-  {"name":"v1.2.3"},
-  {"name":"v2.0.0-rc.1"},
-  {"name":"v10.0.0"},
-  {"name":"nightly"},
-  {"name":"v1.10.0"},
-  {"name":"v2.0.0"},
-  {"name":"v0.9.9"},
-  {"name":"v2.0.0"},
-  {"name":"release-v4.0.0"}
-]"#;
-    context.fake_tools.fixture("curl").stdout(tags);
+    // Branch refs and the peeled `^{}` companion of an annotated tag must be
+    // ignored; non-semver and pre-release tags must be filtered out.
+    let refs = advertised_refs(&[
+        "heads/feature/x",
+        "tags/v1.2.3",
+        "tags/v2.0.0-rc.1",
+        "tags/v10.0.0",
+        "tags/nightly",
+        "tags/v1.10.0",
+        "tags/v2.0.0",
+        "tags/v2.0.0^{}",
+        "tags/v0.9.9",
+        "tags/release-v4.0.0",
+    ]);
+    context.fake_tools.fixture("curl").stdout(refs);
 
     let output = context.run(["backend", "versions", "engine"], 0);
 
@@ -598,7 +707,14 @@ fn backend_versions_filters_and_sorts_stable_semver_tags() {
 
 #[test]
 fn backend_versions_annotates_environment_context() {
-    let tags = r#"[{"name":"v1.2.3"},{"name":"v2.0.0"},{"name":"v1.10.0"},{"name":"v0.9.9"},{"name":"v2.0.0-rc.1"},{"name":"nightly"}]"#;
+    let tags = advertised_tags(&[
+        "v1.2.3",
+        "v2.0.0",
+        "v1.10.0",
+        "v0.9.9",
+        "v2.0.0-rc.1",
+        "nightly",
+    ]);
 
     // The current binding is the only difference between the two cases: it moves
     // the `* ` marker, and a branch binding sorts ahead of every semver tag.
@@ -617,7 +733,7 @@ fn backend_versions_annotates_environment_context() {
         ] {
             env.install_release(release);
         }
-        context.fake_tools.fixture("curl").stdout(tags);
+        context.fake_tools.fixture("curl").stdout(&tags);
 
         let output = context.run(["backend", "versions", "engine"], 0);
         assert_eq!(context.fake_tools.call_count("curl"), 1);
@@ -627,39 +743,35 @@ fn backend_versions_annotates_environment_context() {
 }
 
 #[test]
-fn backend_versions_warns_when_tags_are_saturated() {
-    // 100 tags (the GitHub API's per_page=100 cap) with a shared major.minor so
-    // the only thing distinguishing entries is `.patch`. This is deliberately
-    // "adversarial" for a naive lexicographic sort: v1.0.99 < v1.0.9 as strings,
-    // but must sort *after* it numerically. A full descending dump of all 100
-    // versions is the only way to confirm the sort is numeric end-to-end
-    // (e.g. that v1.0.10 lands between v1.0.11 and v1.0.9, not next to v1.0.1).
-    let tags: Vec<String> = (0..100)
-        .map(|patch| format!(r#"{{"name":"v1.0.{patch}"}}"#))
-        .collect();
-    let tags_json = format!("[{}]", tags.join(","));
+fn backend_versions_sorts_patch_releases_numerically() {
+    // 100 tags with a shared major.minor so the only thing distinguishing
+    // entries is `.patch`. This is deliberately "adversarial" for a naive
+    // lexicographic sort: v1.0.99 < v1.0.9 as strings, but must sort *after*
+    // it numerically. A full descending dump of all 100 versions is the only
+    // way to confirm the sort is numeric end-to-end (e.g. that v1.0.10 lands
+    // between v1.0.11 and v1.0.9, not next to v1.0.1).
+    let tags: Vec<String> = (0..100).map(|patch| format!("v1.0.{patch}")).collect();
+    let refs = advertised_tags(&tags.iter().map(String::as_str).collect::<Vec<_>>());
 
     let context = TestContext::new();
-    context.fake_tools.fixture("curl").stdout(tags_json);
+    context.fake_tools.fixture("curl").stdout(refs);
 
     let output = context.run(["backend", "versions", "gateway"], 0);
     assert_eq!(context.fake_tools.call_count("curl"), 1);
 
-    insta::assert_snapshot!("backend_versions_warns_when_tags_are_saturated", output);
+    insta::assert_snapshot!("backend_versions_sorts_patch_releases_numerically", output);
 }
 
 #[test]
 fn version_resolves_latest_when_cli_version_is_empty() {
-    // Same saturated-tags fixture as list_component_versions, but exercised
-    // through `resolve_latest_version`, which emits its own distinct pair of
-    // warnings ("latest version resolution" instead of "the version list").
-    let tags: Vec<String> = (0..100)
-        .map(|patch| format!(r#"{{"name":"v1.0.{patch}"}}"#))
-        .collect();
-    let tags_json = format!("[{}]", tags.join(","));
+    // Same adversarial patch-release fixture as list_component_versions, but
+    // exercised through `resolve_latest_version`, which must pick the numeric
+    // maximum as "latest".
+    let tags: Vec<String> = (0..100).map(|patch| format!("v1.0.{patch}")).collect();
+    let refs = advertised_tags(&tags.iter().map(String::as_str).collect::<Vec<_>>());
 
     let context = TestContext::new();
-    context.fake_tools.fixture("curl").stdout(tags_json);
+    context.fake_tools.fixture("curl").stdout(refs);
 
     // OQTOPUS_CLI_VERSION is always set by the harness; override it with the
     // empty string so `cli_version()` falls through to `resolve_latest_version`.
@@ -675,7 +787,7 @@ fn backend_versions_rejects_unusable_input() {
     context
         .fake_tools
         .fixture("curl")
-        .stdout(r#"[{"name":"nightly"}]"#);
+        .stdout(advertised_tags(&["nightly"]));
     let output = context.run(["backend", "versions", "tranqu"], 1);
     assert_eq!(context.fake_tools.call_count("curl"), 1);
     insta::assert_snapshot!("backend_versions__no_stable_versions", output);
@@ -751,7 +863,7 @@ fn backend_environment_validation_errors() {
         fs::write(
             work.join(".metadata"),
             format!(
-                "template=cloud-local\nenv_root={}\ninstall_root={}\n",
+                "template=cloud-local\nenvironment_root={}\ninstall_root={}\n",
                 work.display(),
                 context
                     .root()
@@ -764,21 +876,21 @@ fn backend_environment_validation_errors() {
         insta::assert_snapshot!("backend_env__wrong_template", output);
     }
 
-    // `template=backend` and a correct `env_root`, but no `install_root`.
+    // `template=backend` and a correct `environment_root`, but no `install_root`.
     {
         let context = TestContext::new();
         let work = context.work_dir();
         fs::create_dir_all(&work).expect("create work dir");
         fs::write(
             work.join(".metadata"),
-            format!("template=backend\nenv_root={}\n", work.display()),
+            format!("template=backend\nenvironment_root={}\n", work.display()),
         )
         .expect("write .metadata");
         let output = context.run(["backend", "info"], 1);
         insta::assert_snapshot!("backend_env__missing_install_root", output);
     }
 
-    // `env_root` in `.metadata` does not match the current directory.
+    // `environment_root` in `.metadata` does not match the current directory.
     {
         let context = TestContext::new();
         let work = context.work_dir();
@@ -787,7 +899,7 @@ fn backend_environment_validation_errors() {
         fs::write(
             work.join(".metadata"),
             format!(
-                "template=backend\ninstall_root={}\nenv_root={}\n",
+                "template=backend\ninstall_root={}\nenvironment_root={}\n",
                 context
                     .root()
                     .join("xdg-data/oqtopus/backend/releases")
@@ -802,6 +914,46 @@ fn backend_environment_validation_errors() {
 }
 
 #[test]
+fn legacy_metadata_keys_are_migrated_in_place() {
+    // Environments created by older CLI releases carry `env_name`/`env_root`.
+    // Any command that validates the environment (here: `backend info`) must
+    // both accept them and rewrite the file to the new key names.
+    let context = TestContext::new();
+    EnvFixture::create_legacy(&context, "backend", "backend", &[]);
+
+    let output = context.run(["backend", "info"], 0);
+
+    insta::assert_snapshot!(
+        "legacy_metadata_keys__migrated_by_backend_info",
+        render_observation(&context, &output, &[".metadata"])
+    );
+}
+
+#[test]
+fn legacy_metadata_keys_are_read_but_not_migrated_without_validation() {
+    // `backend versions` only *tries* to load the environment, and the
+    // read-only path must not rewrite `.metadata` as a side effect.
+    let context = TestContext::new();
+    EnvFixture::create_legacy(
+        &context,
+        "backend",
+        "backend",
+        &[("engine_version", "v1.2.3")],
+    );
+    context
+        .fake_tools
+        .fixture("curl")
+        .stdout(advertised_tags(&["v1.2.3", "v2.0.0"]));
+
+    let output = context.run(["backend", "versions", "engine"], 0);
+
+    insta::assert_snapshot!(
+        "legacy_metadata_keys__read_only_by_backend_versions",
+        render_observation(&context, &output, &[".metadata"])
+    );
+}
+
+#[test]
 fn backend_versions_ignores_unusable_metadata() {
     let context = TestContext::new();
     let work = context.work_dir();
@@ -810,13 +962,16 @@ fn backend_versions_ignores_unusable_metadata() {
     // than warn, since "versions" works fine outside any environment too.
     fs::write(
         work.join(".metadata"),
-        format!("template=cloud-local\nenv_root={}\n", work.display()),
+        format!(
+            "template=cloud-local\nenvironment_root={}\n",
+            work.display()
+        ),
     )
     .expect("write .metadata");
     context
         .fake_tools
         .fixture("curl")
-        .stdout(r#"[{"name":"v1.2.3"},{"name":"v2.0.0"}]"#);
+        .stdout(advertised_tags(&["v1.2.3", "v2.0.0"]));
 
     let output = context.run(["backend", "versions", "engine"], 0);
 
@@ -825,7 +980,7 @@ fn backend_versions_ignores_unusable_metadata() {
 
 #[test]
 fn metadata_get_uses_the_first_match_and_keeps_inner_separators() {
-    let tags = r#"[{"name":"v1.2.3"},{"name":"v2.0.0"}]"#;
+    let tags = advertised_tags(&["v1.2.3", "v2.0.0"]);
 
     // Two `engine_version` lines in `.metadata`: the first one must win.
     {
@@ -834,7 +989,7 @@ fn metadata_get_uses_the_first_match_and_keeps_inner_separators() {
             &context,
             &[("engine_version", "v1.2.3"), ("engine_version", "v2.0.0")],
         );
-        context.fake_tools.fixture("curl").stdout(tags);
+        context.fake_tools.fixture("curl").stdout(&tags);
 
         let output = context.run(["backend", "versions", "engine"], 0);
 
@@ -846,7 +1001,7 @@ fn metadata_get_uses_the_first_match_and_keeps_inner_separators() {
     {
         let context = TestContext::new();
         EnvFixture::backend(&context, &[("engine_version", "branch:a=b")]);
-        context.fake_tools.fixture("curl").stdout(tags);
+        context.fake_tools.fixture("curl").stdout(&tags);
 
         let output = context.run(["backend", "versions", "engine"], 0);
 
@@ -858,10 +1013,25 @@ fn metadata_get_uses_the_first_match_and_keeps_inner_separators() {
 fn backend_install_branch_writes_metadata_binding() {
     let context = TestContext::new();
     EnvFixture::backend(&context, &[]);
-    context.fake_tools.fixture("git");
+    // A branch install makes two curl calls: first the ref advertisement that
+    // resolves the branch to a commit id, then the codeload tarball for that
+    // commit (whose single top-level directory gets stripped on extraction).
+    context
+        .fake_tools
+        .fixture_call("curl", 1)
+        .stdout(advertised_refs(&[]));
+    let checkout = build_targz(context.root(), "tranqu-server-checkout", |contents| {
+        fs::write(
+            contents.join("pyproject.toml"),
+            "[project]\nname = \"tranqu\"\n",
+        )
+        .expect("write tranqu pyproject fixture");
+    });
+    context.fake_tools.fixture_call("curl", 2).stdout(checkout);
     context.fake_tools.fixture("uv");
 
     let output = context.run(["backend", "install", "tranqu", "branch:main"], 0);
+    assert_eq!(context.fake_tools.call_count("curl"), 2);
 
     if context.invoke_with_bash {
         insta::assert_snapshot!(

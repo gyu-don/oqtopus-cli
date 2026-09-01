@@ -106,6 +106,4 @@ gateway:
   v1.0.1
   v1.0.0
 --- stderr ---
-Warning: the GitHub tags API returned 100 tags.
-Warning: Additional tags may exist, so the version list may be incomplete.
 --- end ---

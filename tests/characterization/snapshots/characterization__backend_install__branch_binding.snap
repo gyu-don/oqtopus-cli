@@ -4,19 +4,20 @@ expression: "render_observation(&context, &output, &[\".metadata\"])"
 ---
 exit: 0
 --- stdout ---
-Cloning tranqu from branch 'main'
+Downloading tranqu from branch 'main'
 Bound tranqu_version=branch:main
 --- stderr ---
 --- filesystem ---
 .metadata
 tranqu/
 tranqu/.venv/
+tranqu/pyproject.toml
 --- selected files ---
 --- .metadata ---
 template=backend
 install_root=<TEST_ROOT>/xdg-data/oqtopus/backend/releases
-env_name=demo
-env_root=<TEST_ROOT>/work
+environment_name=demo
+environment_root=<TEST_ROOT>/work
 created_at=2031-12-13T14:15:16Z
 tranqu_version=branch:main
 --- end ---

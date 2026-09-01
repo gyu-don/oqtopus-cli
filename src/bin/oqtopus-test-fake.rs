@@ -1,7 +1,7 @@
 //! Multi-call fake for the external programs used by `bin/oqtopus`.
 //!
-//! Tests put symlinks named `curl`, `date`, `docker`, `git`, and `uv` on PATH,
-//! all pointing to this executable. Behaviour is configured with a fixture
+//! Tests put symlinks named `curl`, `date`, `docker`, and `uv` on PATH, all
+//! pointing to this executable. Behaviour is configured with a fixture
 //! directory; see `tests/support/fake_tool.rs` for the test-facing API.
 
 use std::env;
@@ -11,7 +11,7 @@ use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process;
 
-const SUPPORTED_TOOLS: &[&str] = &["curl", "date", "docker", "git", "uv"];
+const SUPPORTED_TOOLS: &[&str] = &["curl", "date", "docker", "uv"];
 const RECORDED_ENV_KEYS: &[&str] = &[
     "HOME",
     "XDG_CONFIG_HOME",
@@ -40,7 +40,7 @@ fn run() -> Result<(), String> {
     let state_root = confined_target(&sandbox, &state_root, &sandbox)?;
     let cwd = confined_target(&cwd, Path::new("."), &sandbox)?;
     let ordinal = next_ordinal(&tool, Some(&state_root))?;
-    let fixture = fixture_dir(Some(&fixture_root), &tool).ok_or_else(|| {
+    let fixture = fixture_dir(Some(&fixture_root), &tool, ordinal).ok_or_else(|| {
         format!("no fixture configured for {tool} call {ordinal}; refusing to succeed implicitly")
     })?;
 
@@ -125,8 +125,16 @@ fn next_ordinal(tool: &str, state_root: Option<&Path>) -> Result<u64, String> {
     Ok(ordinal)
 }
 
-fn fixture_dir(root: Option<&Path>, tool: &str) -> Option<PathBuf> {
+/// A response for this specific call (`<tool>/call-<ordinal>/`) wins over the
+/// tool's fallback response (`<tool>/`). Per-call responses exist for tools the
+/// CLI invokes several times with different expectations in one command, e.g.
+/// curl fetching a ref advertisement first and a release tarball second.
+fn fixture_dir(root: Option<&Path>, tool: &str, ordinal: u64) -> Option<PathBuf> {
     let root = root?;
+    let call_dir = root.join(tool).join(format!("call-{ordinal}"));
+    if call_dir.is_dir() {
+        return Some(call_dir);
+    }
     let tool_dir = root.join(tool);
     if tool_dir.is_dir() {
         Some(tool_dir)
@@ -184,14 +192,6 @@ fn apply_default_effects(
                 }
                 fs::write(&path, stdout.unwrap_or_default())
                     .map_err(|error| format!("write curl output {}: {error}", path.display()))?;
-            }
-        }
-        "git" if args.first().map(String::as_str) == Some("clone") => {
-            if let Some(target) = args.last() {
-                let target = confined_target(cwd, Path::new(target), sandbox)?;
-                fs::create_dir_all(&target).map_err(|error| {
-                    format!("create git clone target {}: {error}", target.display())
-                })?;
             }
         }
         "uv" if args.first().map(String::as_str) == Some("sync") => {

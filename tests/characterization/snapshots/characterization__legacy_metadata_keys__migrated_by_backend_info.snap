@@ -4,7 +4,11 @@ expression: "render_observation(&context, &output, &[\".metadata\"])"
 ---
 exit: 0
 --- stdout ---
-Removed <TEST_ROOT>/work/tranqu
+template=backend
+install_root=<TEST_ROOT>/xdg-data/oqtopus/backend/releases
+created_at=2031-12-13T14:15:16Z
+environment_root=<TEST_ROOT>/work
+environment_name=demo
 --- stderr ---
 --- filesystem ---
 .metadata
@@ -12,7 +16,7 @@ Removed <TEST_ROOT>/work/tranqu
 --- .metadata ---
 template=backend
 install_root=<TEST_ROOT>/xdg-data/oqtopus/backend/releases
-environment_name=demo
-environment_root=<TEST_ROOT>/work
 created_at=2031-12-13T14:15:16Z
+environment_root=<TEST_ROOT>/work
+environment_name=demo
 --- end ---

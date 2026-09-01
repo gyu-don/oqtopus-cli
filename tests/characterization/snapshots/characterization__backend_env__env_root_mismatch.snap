@@ -5,7 +5,7 @@ expression: output
 exit: 1
 --- stdout ---
 --- stderr ---
-Error: Current directory does not match env_root.
-env_root = <TEST_ROOT>/elsewhere
-current  = <TEST_ROOT>/work
+Error: Current directory does not match environment_root.
+environment_root = <TEST_ROOT>/elsewhere
+current          = <TEST_ROOT>/work
 --- end ---
