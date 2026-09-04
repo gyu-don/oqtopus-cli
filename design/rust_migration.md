@@ -34,16 +34,69 @@ The route inventory must be visible and reviewable. Changing a route from Bash
 to Rust is an explicit migration step, not an incidental result of adding an
 implementation.
 
+The inventory is represented by explicit matches in the Rust entrypoint's
+routing function. A route is native only when a match selects its Rust
+implementation; the catch-all route remains Bash.
+
+Routes are recorded per subcommand, such as `backend status`, not per top-level
+command. A top-level command may therefore be partially native, with the
+remaining subcommands still delegated to Bash. Closely related subcommands may
+be migrated together in one slice when that is clearer.
+
+During the hybrid period the supported platforms are Linux and macOS, where
+fallback uses `exec`. Windows support is a separate topic outside this plan.
+
+Tests forbid fallback through an environment variable. When it is set, the
+executable exits with a distinct exit code instead of running Bash. Tests for
+migrated routes always set it.
+
+## Downstream consumer boundary
+
+The OQTOPUS Manager (`oqtopus-team/oqtopus-manager`) drives this CLI as a
+subprocess. It is the primary non-human consumer, and its expectations form a
+compatibility boundary that the migration must hold even where a behavior looks
+like an incidental Bash detail.
+
+The Manager executes `oqtopus` found on `PATH`, without a shell, with the
+working directory set to an environment root and with no controlling terminal.
+The boundary therefore covers:
+
+- The invoked argv surface: `init`, and for `backend` and `cloud-local` the
+  `status`, `info`, `versions`, `device-status`, `install`, `update`,
+  `uninstall`, `build`, `start`, `stop`, and `restart` subcommands.
+- The human-readable stdout of the read-only commands, which the Manager parses
+  line by line: the `name: state` rows of `status` including their `(pid N)`
+  and container annotations, the `key=value` rows of `info`, and the order,
+  current-version marker, and annotations of `versions`.
+- Exit status, and the separation of stdout from stderr for captured commands.
+- Incremental output: streamed commands must flush progress as it happens
+  rather than at process exit, and must not keep the standard streams open
+  through a spawned daemon. Rust block-buffers a piped stdout where the Bash
+  implementation effectively wrote line by line, so this is a real porting
+  hazard that snapshots of finished output cannot detect.
+- The environment-root layout the Manager reads directly, such as
+  `logs/<service>/service.log` and `config/.env`.
+
+Structured (`--json`) output is an additive future direction, not a substitute
+for this boundary: text output stays stable until a coordinated change is
+agreed with the Manager.
+
+Slices touching this boundary must state, in the implementing change, whether
+the Manager's parsing still holds.
+
 ## Command migration workflow
 
 For each command or coherent subcommand slice:
 
-1. Inspect the Bash implementation, documentation, and relevant usage.
+1. Inspect the Bash implementation, documentation, and relevant usage,
+   including whether the Manager invokes the slice.
 2. Add the characterization cases needed to understand that slice.
 3. Run those cases against Bash and review the resulting snapshots before
    implementing the Rust version.
 4. Decide for each observed behavior whether to preserve it, intentionally
    change it, omit it as a Bash-specific detail, or leave it undecided.
+   Behavior inside the downstream consumer boundary is preserved unless the
+   change is agreed with that consumer and recorded.
 5. Implement the Rust slice and add sufficient tests for its argument handling,
    main behavior, errors, and externally observable results.
 6. Run migrated-route tests with Bash fallback forbidden.
@@ -66,6 +119,16 @@ human-readable command output or generated files. Prefer focused assertions or
 unit tests when they express parsing, ordering, validation, or other individual
 semantics more clearly.
 
+Help text is preserved byte-for-byte while a command is migrated and pinned by
+snapshots. Improvements to help formatting are deferred until the surface they
+describe is native.
+
+Output the Manager parses is pinned twice: by a snapshot of the whole
+artifact, and by focused assertions for the individual details its parsers
+depend on, such as row order, the `(pid N)` form, and the current-version
+marker. A snapshot alone records those details without stating that they are
+load-bearing.
+
 Do not preserve calls to `curl`, `jq`, `tar`, or other Bash implementation
 details merely because the legacy CLI makes them. External calls that remain
 part of product behavior, such as `uv` or Docker invocations, may be tested when
@@ -74,6 +137,12 @@ their arguments or effects matter.
 Snapshot expectations must be produced from the Bash implementation before the
 corresponding Rust implementation is written. Snapshot changes are reviewed;
 they are never accepted mechanically.
+
+Characterization tests run the Rust executable by default and compare its
+output with the saved snapshots. While establishing snapshots before a port,
+`make record-characterization` explicitly substitutes the Bash implementation
+as the test subject. Normal test runs must not consult Bash for the expected
+output.
 
 The initial Rust wrapper deliberately has zero characterization snapshots.
 
@@ -91,6 +160,16 @@ implementation.
 
 This design does not prescribe a test count, module layout, mocking strategy,
 or a fixed ratio of snapshot, integration, and unit tests.
+
+## Decided compatibility changes
+
+- `version` prints only the version compiled into the executable and never
+  contacts the network. The `OQTOPUS_CLI_VERSION` environment variable is no
+  longer consulted. This is tested by direct comparison, not by snapshot, and
+  packaging must inject the correct version at build time.
+- Automatic migration of old `.metadata` keys, such as `env_root` to
+  `environment_root`, is preserved for backward compatibility, including when
+  it is triggered by read-only commands.
 
 ## Completion during the hybrid period
 
@@ -112,6 +191,27 @@ slice that changes it.
 The historical characterization branch may be consulted if useful, but this
 plan does not depend on reusing it.
 
+## Planned slice order
+
+The intended order starts with commands that matter to users but carry little
+implementation risk, so that the routing, testing, and snapshot machinery is
+established before harder slices. It may be reordered when a slice reveals a
+better path.
+
+1. Top-level `help`, `--help`, no arguments, and `version`, `--version`.
+2. Read-only environment commands: `info` and `status` for `backend`,
+   `cloud-local`, and `manager`, plus `backend device-status`.
+3. `versions` for all three templates, establishing remote ref discovery and
+   version ordering.
+4. `init`.
+5. `install`, `uninstall`, `update`, and `build`.
+6. `start`, `stop`, and `restart`.
+7. Completion moves to a Rust-owned command model, followed by fallback
+   retirement and binary packaging.
+
+Slices 2 and 3 produce the output the Manager parses, so the first real slices
+are also the first exercise of the downstream consumer boundary.
+
 ## Fallback retirement
 
 The Bash implementation can be removed only after:
@@ -119,17 +219,19 @@ The Bash implementation can be removed only after:
 - every supported route is explicitly native;
 - migrated-route tests cannot silently use fallback;
 - compatibility decisions and intentional deviations have been recorded;
+- the downstream consumer boundary is satisfied by the native implementations;
 - completion covers the intended command surface; and
 - distribution and rollback no longer depend on the legacy script.
 
 ## Open migration decisions
 
-- Where the Rust executable finds the Bash fallback in development and in
-  packaged installations.
-- Which non-Unix platforms must be supported during the hybrid period and what
-  replaces `exec` there.
-- The granularity and representation of the route inventory once the first
-  native slice is introduced.
+- Where the Rust executable finds the Bash fallback in packaged installations.
+  Development keeps the current manifest-relative lookup until the first
+  distribution change, which must settle this together with packaging.
 - When completion moves from Bash to a Rust-owned command model.
 - How the hybrid executable and legacy script are packaged, installed, and
-  rolled back.
+  rolled back. Packaging must keep an `oqtopus` executable on `PATH`, because
+  the Manager resolves it by name.
+- When structured (`--json`) output is introduced, and whether the
+  human-readable output is frozen, kept as-is, or allowed to change at that
+  point.

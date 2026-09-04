@@ -2,7 +2,7 @@ SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-.PHONY: install test test-characterization diff-backend-configs docs-lint docs-build docs-serve help
+.PHONY: install test test-characterization record-characterization diff-backend-configs docs-lint docs-build docs-serve help
 
 install: ## Install dependencies and configure git hooks and commit template
 	@uv sync --all-groups
@@ -16,6 +16,9 @@ test: ## Run Rust tests
 
 test-characterization: ## Run characterization snapshots
 	@cargo test --locked --test characterization
+
+record-characterization: ## Record characterization snapshots from Bash
+	@OQTOPUS_CHARACTERIZATION_SOURCE=bash INSTA_UPDATE=always cargo test --locked --test characterization
 
 diff-backend-configs: ## Compare backend template configs against upstream repositories
 	@scripts/diff-backend-configs.sh
