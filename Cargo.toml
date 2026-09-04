@@ -1,0 +1,17 @@
+[package]
+name = "oqtopus-cli"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[[bin]]
+name = "oqtopus"
+path = "src/main.rs"
+
+[[test]]
+name = "characterization"
+path = "tests/characterization/main.rs"
+
+[dev-dependencies]
+insta = "1"
