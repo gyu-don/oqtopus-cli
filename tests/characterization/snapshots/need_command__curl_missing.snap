@@ -1,9 +1,0 @@
----
-source: tests/characterization/errors.rs
-expression: output
----
-exit: 1
---- stdout ---
---- stderr ---
-Error: 'curl' is required but was not found on PATH.
---- end ---

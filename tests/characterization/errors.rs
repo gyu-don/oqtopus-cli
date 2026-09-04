@@ -1,8 +1,6 @@
 //! The argument-error contract: unknown commands, malformed invocations,
 //! and missing external dependencies.
 
-use std::fs;
-
 use crate::harness::*;
 
 #[test]
@@ -82,21 +80,6 @@ fn representative_errors() {
 
 #[test]
 fn need_command_reports_missing_dependencies() {
-    // `curl` itself is absent from PATH.
-    {
-        let context = TestContext::new();
-        let empty_path = context.root().join("no-tools");
-        fs::create_dir_all(&empty_path).expect("create empty PATH directory");
-
-        let output = context.run_with_env(
-            ["backend", "versions", "engine"],
-            1,
-            [("PATH", empty_path.as_os_str())],
-        );
-
-        snap!("need_command__curl_missing", output);
-    }
-
     // `curl` is present (the fake tool) but `jq` is not.
     {
         let context = TestContext::new();

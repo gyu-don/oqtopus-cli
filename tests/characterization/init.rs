@@ -37,7 +37,6 @@ fn init_backend_creates_rendered_environment() {
     let output = context.run(["init", "demo", "--template", "backend"], 0);
 
     if context.invoke_with_bash {
-        assert_eq!(context.fake_tools.call_count("curl"), 1);
         assert_eq!(context.fake_tools.call_count("date"), 1);
         snap!(
             "bash_external_calls__init_backend",

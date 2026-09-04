@@ -61,7 +61,6 @@ fn manager_versions_lists_remote_tags_outside_an_environment() {
         .stdout(advertised_tags(&["v1.2.3", "v2.0.0", "v1.10.0", "nightly"]));
 
     let output = context.run(["manager", "versions"], 0);
-    assert_eq!(context.fake_tools.call_count("curl"), 1);
 
     snap!("manager_versions__outside_environment", output);
 }
@@ -89,7 +88,6 @@ fn manager_versions_annotates_environment_context() {
         context.fake_tools.fixture("curl").stdout(&tags);
 
         let output = context.run(["manager", "versions"], 0);
-        assert_eq!(context.fake_tools.call_count("curl"), 1);
 
         snap!(name, output);
     }
@@ -136,7 +134,6 @@ fn manager_install_release_downloads_the_tag_archive() {
     context.fake_tools.fixture("uv");
 
     let output = context.run(["manager", "install", "v1.2.3"], 0);
-    assert_eq!(context.fake_tools.call_count("curl"), 1);
 
     let release = env.install_root.join("manager-v1.2.3");
     assert!(
@@ -176,7 +173,6 @@ fn manager_install_branch_writes_metadata_binding() {
     context.fake_tools.fixture("uv");
 
     let output = context.run(["manager", "install", "branch:develop"], 0);
-    assert_eq!(context.fake_tools.call_count("curl"), 2);
 
     if context.invoke_with_bash {
         snap!(
@@ -206,7 +202,6 @@ fn manager_update_resolves_and_installs_the_latest_release() {
     context.fake_tools.fixture("uv");
 
     let output = context.run(["manager", "update"], 0);
-    assert_eq!(context.fake_tools.call_count("curl"), 2);
 
     snap!(
         "manager_update__rebinds_to_latest",

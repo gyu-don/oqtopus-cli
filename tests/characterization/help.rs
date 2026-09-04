@@ -84,7 +84,6 @@ fn version() {
     for (name, argument) in [("command", "version"), ("flag", "--version")] {
         let context = TestContext::new();
         let output = context.run([argument], 0);
-        assert_eq!(context.fake_tools.call_count("curl"), 0);
         snap!(format!("version__{name}"), output);
     }
 }

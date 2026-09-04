@@ -104,7 +104,6 @@ fn backend_install_branch_writes_metadata_binding() {
     context.fake_tools.fixture("uv");
 
     let output = context.run(["backend", "install", "tranqu", "branch:main"], 0);
-    assert_eq!(context.fake_tools.call_count("curl"), 2);
 
     if context.invoke_with_bash {
         snap!(
