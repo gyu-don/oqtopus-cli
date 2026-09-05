@@ -144,6 +144,12 @@ output with the saved snapshots. While establishing snapshots before a port,
 as the test subject. Normal test runs must not consult Bash for the expected
 output.
 
+Environment-dependent characterization tests create `.metadata` and the
+required directory structure in a fresh temporary directory. They do not use a
+developer's local environment. Machine-specific temporary paths are normalized
+to `<TEST_ROOT>` before snapshot comparison; other volatile values such as PIDs
+are either avoided, normalized, or checked with focused assertions.
+
 The initial Rust wrapper deliberately has zero characterization snapshots.
 
 ## Test requirement
@@ -170,6 +176,13 @@ or a fixed ratio of snapshot, integration, and unit tests.
 - Automatic migration of old `.metadata` keys, such as `env_root` to
   `environment_root`, is preserved for backward compatibility, including when
   it is triggered by read-only commands.
+- Metadata parsing requires the `key=value` form. A bare `template` line is
+  therefore reported as a missing template instead of reproducing Bash's
+  accidental treatment of the whole line as its value.
+- CRLF metadata is accepted. Validation ignores the carriage return through
+  Rust's line parsing, while successful `info` output retains the original byte
+  sequence. The legacy parser rejected these files because it included the
+  carriage return in the field value.
 
 ## Completion during the hybrid period
 

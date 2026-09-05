@@ -5,6 +5,10 @@ edition = "2024"
 publish = false
 autotests = false
 
+[dependencies]
+libc = "0.2"
+tempfile = "3"
+
 [[bin]]
 name = "oqtopus"
 path = "src/main.rs"

@@ -2,6 +2,8 @@ use std::process::{Command, Output};
 
 const FORBID_LEGACY_FALLBACK: &str = "OQTOPUS_FORBID_LEGACY_FALLBACK";
 
+// These tests exercise only behavior implemented by the Rust binary. Falling back would make a
+// passing assertion ambiguous: it could be validating the legacy CLI instead.
 fn run_rust(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_oqtopus"))
         .args(args)
@@ -14,6 +16,8 @@ fn run_rust(args: &[&str]) -> Output {
 fn version_uses_the_compiled_package_version() {
     let expected = format!("oqtopus {}\n", env!("CARGO_PKG_VERSION"));
 
+    // Both spellings intentionally ignore trailing arguments for compatibility with the legacy
+    // command. The environment override is poisoned to prove that the build metadata wins.
     for args in [
         &["version"][..],
         &["--version"],
@@ -42,12 +46,18 @@ fn version_uses_the_compiled_package_version() {
 
 #[test]
 fn unmigrated_route_honors_fallback_forbidden() {
-    let output = run_rust(&["not-yet-migrated"]);
+    // Cover both an unknown top-level command and a known command whose subcommand is not migrated.
+    for args in [&["not-yet-migrated"][..], &["backend", "status"]] {
+        let output = run_rust(args);
 
-    assert_eq!(output.status.code(), Some(125));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        output.stderr,
-        b"Error: legacy Bash fallback is forbidden for this invocation.\n"
-    );
+        assert_eq!(output.status.code(), Some(125), "wrong status for {args:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "stdout was not empty for {args:?}"
+        );
+        assert_eq!(
+            output.stderr, b"Error: legacy Bash fallback is forbidden for this invocation.\n",
+            "wrong stderr for {args:?}"
+        );
+    }
 }
