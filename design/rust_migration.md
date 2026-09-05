@@ -71,9 +71,13 @@ The boundary therefore covers:
 - Exit status, and the separation of stdout from stderr for captured commands.
 - Incremental output: streamed commands must flush progress as it happens
   rather than at process exit, and must not keep the standard streams open
-  through a spawned daemon. Rust block-buffers a piped stdout where the Bash
-  implementation effectively wrote line by line, so this is a real porting
-  hazard that snapshots of finished output cannot detect.
+  through a spawned daemon. This is a real porting hazard that snapshots of
+  finished output cannot detect. Flush progress at notification boundaries,
+  including updates without a trailing newline; do not rely on implicit line
+  buffering. Additional buffering must not delay those notifications. Flush
+  pending output before handing the same stream to a child process so that
+  parent and child output retains its intended order. Bash `log` writes
+  progress to stdout; text mode preserves that stream.
 - The environment-root layout the Manager reads directly, such as
   `logs/<service>/service.log` and `config/.env`.
 
@@ -83,6 +87,34 @@ agreed with the Manager.
 
 Slices touching this boundary must state, in the implementing change, whether
 the Manager's parsing still holds.
+
+## Result data and rendering
+
+As commands are migrated, keep result data separate from text rendering.
+Commands such as `status` should return a command-specific struct containing
+the observed state, including fields such as service names, states, and PIDs.
+A separate text-rendering function accepts that result and a `Write` sink,
+preserving the existing text format. A future JSON renderer can serialize the
+same result without reconstructing data from display strings.
+
+A wrapper around `println!` or an API accepting only formatted strings does
+not establish this boundary. Native commands use concrete result types
+(`VersionInfo` and `BackendInfo`) and text-rendering functions in `src/text.rs`.
+Apply the same separation as further commands, such as `status`, are migrated.
+Defer a shared output trait, JSON schemas, and `--json` implementation until
+there is a concrete need for them.
+
+Outputs whose compatibility contract requires original bytes remain verbatim.
+For example, `BackendInfo` retains the metadata bytes, preserving
+unknown fields and formatting. Future structured output can add a parsed view
+without regenerating the existing text output from that view.
+
+Progress notifications are separate from a command's final result. Introduce
+a small reporter with explicit flushing when migrating the first command that
+needs incremental progress. Preserve text-mode stdout/stderr behavior. In a
+future JSON mode, reserve stdout for the structured result and route progress
+and child-process logs separately so that they cannot corrupt it. Decide any
+streaming JSON protocol when an actual consumer requires one.
 
 ## Command migration workflow
 
