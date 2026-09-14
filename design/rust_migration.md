@@ -11,6 +11,10 @@ implementation choices remain with the person or agent implementing each
 slice. Progress tracking belongs in issues, and command-specific compatibility
 decisions belong in the pull request that makes them.
 
+The maintained module responsibilities, UTF-8 policy, and startup recovery design
+are recorded in [Runtime architecture](runtime_architecture.md). That document
+also defines the completion criteria for the pre-review architecture cleanup.
+
 ## Migration architecture
 
 The Rust executable owns a small, explicit routing decision:
@@ -114,10 +118,11 @@ Apply the same separation as further commands, such as `status`, are migrated.
 Defer a shared output trait, JSON schemas, and `--json` implementation until
 there is a concrete need for them.
 
-Outputs whose compatibility contract requires original bytes remain verbatim.
-For example, `BackendInfo` retains the metadata bytes, preserving
-unknown fields and formatting. Future structured output can add a parsed view
-without regenerating the existing text output from that view.
+Outputs whose compatibility contract requires original text remain verbatim.
+For example, `BackendInfo` retains the UTF-8 metadata text, preserving unknown
+fields and formatting. Text uses `String`/`&str`; metadata that is not valid
+UTF-8 is rejected. Future structured output can add a parsed view without
+regenerating the existing text output from that view.
 
 Progress notifications are separate from a command's final result. Introduce
 a small reporter with explicit flushing when migrating the first command that
@@ -206,8 +211,9 @@ Tests for a migrated route must be able to forbid Bash fallback. This prevents
 a hybrid-entrypoint test from passing without exercising the Rust
 implementation.
 
-This design does not prescribe a test count, module layout, mocking strategy,
-or a fixed ratio of snapshot, integration, and unit tests.
+This migration workflow does not prescribe a test count, mocking strategy,
+or a fixed ratio of snapshot, integration, and unit tests. Module responsibilities
+are specified separately in the runtime architecture document.
 
 ## Decided compatibility changes
 
@@ -225,6 +231,16 @@ or a fixed ratio of snapshot, integration, and unit tests.
   Rust's line parsing, while successful `info` output retains the original byte
   sequence. The legacy parser rejected these files because it included the
   carriage return in the field value.
+- Metadata and device-status text must be valid UTF-8. Invalid text is rejected
+  on read rather than interpreted lossily or retained through a parallel binary
+  editing path. Every command reports it identically, including `versions`,
+  which otherwise runs without an environment: an environment it cannot decode
+  is reported rather than silently listed without its installed markers.
+  Successful metadata output preserves the original UTF-8 text; binding edits
+  preserve untouched lines, including their line endings and an unterminated
+  final line. Updating a CRLF-terminated binding preserves CRLF, and an appended
+  binding follows the file's last line ending. Bash concatenated an appended
+  binding onto an unterminated final line; Rust separates them instead.
 - Command-line arguments are required to be valid UTF-8. Bash forwards arbitrary
   bytes, but no supported invocation needs them, and carrying `OsString` through
   routing and every command signature costs more than the capability is worth.
@@ -267,6 +283,11 @@ or a fixed ratio of snapshot, integration, and unit tests.
   signaling PID 0 targets the CLI's entire process group rather than one
   managed service; treating a corrupt PID file as stopped avoids that unsafe
   side effect.
+- Rust service startup uses an OS lock on a persistent
+  `pids/.<service>.start.guard` file. The old start-lock directory is retained
+  for diagnostics and legacy recovery, but Rust mutual exclusion does not rely
+  on `Drop` running. Children publish their PID before executing the service so
+  killing the caller cannot leave an executing service without its PID record.
 - Release uninstall continues to remove only the shared release directory and
   leaves the environment binding in metadata. Branch uninstall removes the
   environment-local checkout and its binding. Install and update write a
@@ -324,9 +345,9 @@ slice that changes it.
    where it matters; snapshot changes are reviewed one by one, and deviations
    in details that nothing depends on, such as malformed-argument errors and
    generated usage text, are accepted and recorded. The downstream consumer
-   boundary is not relaxed by this step. As part of that refactoring, consolidate
-   the repeated operation dispatch in `main.rs` and the shared engine handling
-   and binding steps at the end of release and branch installation.
+   boundary is not relaxed by this step. Module and dispatch cleanup belongs to
+   the pre-review runtime architecture work and does not depend on adopting
+   `clap`.
 
 The historical characterization branch may be consulted if useful, but this
 plan does not depend on reusing it.

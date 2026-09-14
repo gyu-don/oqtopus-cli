@@ -233,26 +233,11 @@ fn render_backend_environment(environment_name: &str, path: &Path) -> Result<(),
     if !path.is_file() {
         return Ok(());
     }
-    let contents = fs::read(path)
+    let contents = fs::read_to_string(path)
         .map_err(|error| format!("failed to read backend environment template: {error}"))?;
-    let rendered = replace_all(&contents, b"{{ env_name }}", environment_name.as_bytes());
+    let rendered = contents.replace("{{ env_name }}", environment_name);
     fs::write(path, rendered)
         .map_err(|error| format!("failed to render backend environment template: {error}"))
-}
-
-fn replace_all(contents: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
-    let mut rendered = Vec::with_capacity(contents.len());
-    let mut remaining = contents;
-    while let Some(index) = remaining
-        .windows(needle.len())
-        .position(|window| window == needle)
-    {
-        rendered.extend_from_slice(&remaining[..index]);
-        rendered.extend_from_slice(replacement);
-        remaining = &remaining[index + needle.len()..];
-    }
-    rendered.extend_from_slice(remaining);
-    rendered
 }
 
 fn create_runtime_directories(root: &Path, template: EnvironmentTemplate) -> Result<(), String> {

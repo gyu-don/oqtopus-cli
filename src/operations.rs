@@ -8,8 +8,8 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::archive::extract_github_archive;
-use crate::environment::{Environment, validate_environment};
-use crate::metadata::{metadata_get, set_metadata_value, unset_metadata_value};
+use crate::environment::Environment;
+use crate::metadata::{set_metadata_value, unset_metadata_value};
 use crate::progress::Reporter;
 use crate::remote::{fetch_remote_tags, fetch_url, remote_refs_url, resolve_branch_commit};
 use crate::versions::latest_stable;
@@ -47,7 +47,7 @@ impl OperationResult {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum ComponentKind {
+pub(crate) enum ComponentKind {
     Engine,
     BackendPython,
     CloudPython,
@@ -56,342 +56,18 @@ enum ComponentKind {
 }
 
 #[derive(Clone, Copy)]
-struct Component {
-    name: &'static str,
-    repository: &'static str,
-    binding_key: &'static str,
-    kind: ComponentKind,
-}
-
-const BACKEND_COMPONENTS: [Component; 3] = [
-    Component {
-        name: "engine",
-        repository: "oqtopus-team/oqtopus-engine",
-        binding_key: "engine_version",
-        kind: ComponentKind::Engine,
-    },
-    Component {
-        name: "tranqu",
-        repository: "oqtopus-team/tranqu-server",
-        binding_key: "tranqu_version",
-        kind: ComponentKind::BackendPython,
-    },
-    Component {
-        name: "gateway",
-        repository: "oqtopus-team/device-gateway",
-        binding_key: "gateway_version",
-        kind: ComponentKind::BackendPython,
-    },
-];
-
-const CLOUD_LOCAL_COMPONENTS: [Component; 3] = [
-    Component {
-        name: "cloud",
-        repository: "oqtopus-team/oqtopus-cloud",
-        binding_key: "cloud_local_cloud_version",
-        kind: ComponentKind::CloudPython,
-    },
-    Component {
-        name: "frontend",
-        repository: "oqtopus-team/oqtopus-frontend",
-        binding_key: "cloud_local_frontend_version",
-        kind: ComponentKind::Static,
-    },
-    Component {
-        name: "admin",
-        repository: "oqtopus-team/oqtopus-admin",
-        binding_key: "cloud_local_admin_version",
-        kind: ComponentKind::Static,
-    },
-];
-
-const MANAGER_COMPONENT: Component = Component {
-    name: "manager",
-    repository: "oqtopus-team/oqtopus-manager",
-    binding_key: "manager_version",
-    kind: ComponentKind::Manager,
-};
-
-pub(crate) fn backend_install<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::BackendInstall, 0));
-    }
-    let environment = validate_environment("backend")?;
-    let Some(component_name) = args.first() else {
-        return Ok(usage(OperationKind::BackendInstall, 1));
-    };
-    let mut version = "";
-    let mut skip_sse_build = false;
-    for arg in &args[1..] {
-        if arg == "--skip-sse-build" {
-            skip_sse_build = true;
-        } else if arg.starts_with('-') {
-            return Err(format!("unknown install option: {arg}"));
-        } else if !version.is_empty() {
-            return Ok(usage(OperationKind::BackendInstall, 1));
-        } else {
-            version = arg;
-        }
-    }
-
-    let mut reporter = Reporter::new(out);
-    if component_name == "all" {
-        if !version.is_empty() {
-            return Err("oqtopus backend install all does not accept a version argument.".into());
-        }
-        for component in BACKEND_COMPONENTS {
-            install_release(&environment, component, None, skip_sse_build, &mut reporter)?;
-        }
-        return Ok(success());
-    }
-    if skip_sse_build && component_name != "engine" {
-        return Err("--skip-sse-build is only supported for 'engine' and 'all'.".into());
-    }
-    let component = find_component(&BACKEND_COMPONENTS, component_name)?;
-    install_version(
-        &environment,
-        component,
-        (!version.is_empty()).then_some(version),
-        skip_sse_build,
-        &mut reporter,
-    )?;
-    Ok(success())
-}
-
-pub(crate) fn backend_uninstall<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::BackendUninstall, 0));
-    }
-    let environment = validate_environment("backend")?;
-    if args.len() != 2 || args[0].is_empty() || args[1].is_empty() {
-        return Ok(usage(OperationKind::BackendUninstall, 1));
-    }
-    let component = find_component(&BACKEND_COMPONENTS, &args[0])?;
-    let mut reporter = Reporter::new(out);
-    uninstall(&environment, component, &args[1], &mut reporter)?;
-    Ok(success())
-}
-
-pub(crate) fn backend_update<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::BackendUpdate, 0));
-    }
-    let environment = validate_environment("backend")?;
-    if args.len() != 1 || args[0].is_empty() {
-        return Ok(usage(OperationKind::BackendUpdate, 1));
-    }
-    let component = find_component(&BACKEND_COMPONENTS, &args[0])?;
-    install_release(
-        &environment,
-        component,
-        None,
-        false,
-        &mut Reporter::new(out),
-    )?;
-    Ok(success())
-}
-
-pub(crate) fn backend_build<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::BackendBuild, 0));
-    }
-    let environment = validate_environment("backend")?;
-    if args.len() != 1 || args[0] != "sse-runtime" {
-        return Ok(usage(OperationKind::BackendBuild, 1));
-    }
-    let metadata = String::from_utf8_lossy(&environment.metadata);
-    let version = metadata_get(&metadata, "engine_version")
-        .ok_or("engine is not installed in this backend environment.")?;
-    let target = if version.starts_with("branch:") {
-        environment.root.join("engine")
-    } else {
-        environment.install_root.join(format!("engine-{version}"))
-    };
-    if !target.is_dir() {
-        return Err(format!(
-            "installed engine release not found: {}",
-            target.display()
-        ));
-    }
-    if !component_complete(ComponentKind::Engine, &target) {
-        return Err(format!(
-            "engine {version} is not completely installed in this backend environment."
-        ));
-    }
-    build_sse_runtime(&environment, &target, &mut Reporter::new(out))?;
-    Ok(success())
-}
-
-pub(crate) fn cloud_local_install<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::CloudLocalInstall, 0));
-    }
-    let environment = validate_environment("cloud-local")?;
-    let Some(component_name) = args.first() else {
-        return Ok(usage(OperationKind::CloudLocalInstall, 1));
-    };
-    let mut version = "";
-    for arg in &args[1..] {
-        if arg.starts_with('-') {
-            return Err(format!("unknown install option: {arg}"));
-        } else if !version.is_empty() {
-            return Ok(usage(OperationKind::CloudLocalInstall, 1));
-        } else {
-            version = arg;
-        }
-    }
-    let mut reporter = Reporter::new(out);
-    if component_name == "all" {
-        if !version.is_empty() {
-            return Err(
-                "oqtopus cloud-local install all does not accept a version argument.".into(),
-            );
-        }
-        for component in CLOUD_LOCAL_COMPONENTS {
-            install_release(&environment, component, None, false, &mut reporter)?;
-        }
-        return Ok(success());
-    }
-    let component = find_component(&CLOUD_LOCAL_COMPONENTS, component_name)?;
-    install_version(
-        &environment,
-        component,
-        (!version.is_empty()).then_some(version),
-        false,
-        &mut reporter,
-    )?;
-    Ok(success())
-}
-
-pub(crate) fn cloud_local_uninstall<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::CloudLocalUninstall, 0));
-    }
-    let environment = validate_environment("cloud-local")?;
-    if args.len() != 2 || args[0].is_empty() || args[1].is_empty() {
-        return Ok(usage(OperationKind::CloudLocalUninstall, 1));
-    }
-    let component = find_component(&CLOUD_LOCAL_COMPONENTS, &args[0])?;
-    uninstall(&environment, component, &args[1], &mut Reporter::new(out))?;
-    Ok(success())
-}
-
-pub(crate) fn cloud_local_update<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::CloudLocalUpdate, 0));
-    }
-    let environment = validate_environment("cloud-local")?;
-    if args.len() != 1 || args[0].is_empty() {
-        return Ok(usage(OperationKind::CloudLocalUpdate, 1));
-    }
-    let component = find_component(&CLOUD_LOCAL_COMPONENTS, &args[0])?;
-    install_release(
-        &environment,
-        component,
-        None,
-        false,
-        &mut Reporter::new(out),
-    )?;
-    Ok(success())
-}
-
-pub(crate) fn manager_install<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::ManagerInstall, 0));
-    }
-    let environment = validate_environment("manager")?;
-    let mut version = "";
-    // The manager is a single component, so unlike backend and cloud-local there is no component
-    // word to skip: the first positional argument is already the version.
-    for arg in args {
-        if arg.starts_with('-') {
-            return Err(format!("unknown install option: {arg}"));
-        } else if !version.is_empty() {
-            return Ok(usage(OperationKind::ManagerInstall, 1));
-        } else {
-            version = arg;
-        }
-    }
-    install_version(
-        &environment,
-        MANAGER_COMPONENT,
-        (!version.is_empty()).then_some(version),
-        false,
-        &mut Reporter::new(out),
-    )?;
-    Ok(success())
-}
-
-pub(crate) fn manager_uninstall<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::ManagerUninstall, 0));
-    }
-    let environment = validate_environment("manager")?;
-    if args.len() != 1 || args[0].is_empty() {
-        return Ok(usage(OperationKind::ManagerUninstall, 1));
-    }
-    uninstall(
-        &environment,
-        MANAGER_COMPONENT,
-        &args[0],
-        &mut Reporter::new(out),
-    )?;
-    Ok(success())
-}
-
-pub(crate) fn manager_update<W: Write>(
-    args: &[String],
-    out: &mut W,
-) -> Result<OperationResult, String> {
-    if is_help(args) {
-        return Ok(usage(OperationKind::ManagerUpdate, 0));
-    }
-    let environment = validate_environment("manager")?;
-    if !args.is_empty() {
-        return Ok(usage(OperationKind::ManagerUpdate, 1));
-    }
-    install_release(
-        &environment,
-        MANAGER_COMPONENT,
-        None,
-        false,
-        &mut Reporter::new(out),
-    )?;
-    Ok(success())
+pub(crate) struct Component {
+    pub(crate) name: &'static str,
+    pub(crate) repository: &'static str,
+    pub(crate) binding_key: &'static str,
+    pub(crate) kind: ComponentKind,
 }
 
 /// Installs an explicitly requested version, which may name a branch instead of a release.
 ///
 /// The `update` commands deliberately call [`install_release`] directly rather than going through
 /// here: update means "move to the latest release", so it never accepts or preserves a branch.
-fn install_version<W: Write>(
+pub(crate) fn install_version<W: Write>(
     environment: &Environment,
     component: Component,
     version: Option<&str>,
@@ -409,7 +85,7 @@ fn install_version<W: Write>(
     }
 }
 
-fn install_release<W: Write>(
+pub(crate) fn install_release<W: Write>(
     environment: &Environment,
     component: Component,
     requested_version: Option<&str>,
@@ -453,20 +129,14 @@ fn install_release<W: Write>(
         download_release(component, &version, &target)?;
         sync_component(component, &version, &target, reporter)?;
     }
-    if component.kind == ComponentKind::Engine {
-        if skip_sse_build {
-            progress(
-                reporter,
-                format!("Skipping sse_runtime Docker image build for engine {version}."),
-            )?;
-        } else {
-            build_sse_runtime(environment, &target, reporter)?;
-        }
-    }
-    set_binding(environment, component.binding_key, &version)?;
-    progress(
+    finish_install(
+        environment,
+        component,
+        &version,
+        &target,
+        skip_sse_build,
+        format!("Skipping sse_runtime Docker image build for engine {version}."),
         reporter,
-        format!("Bound {}={version}", component.binding_key),
     )
 }
 
@@ -522,17 +192,34 @@ fn install_branch<W: Write>(
     })?;
     let version = format!("branch:{branch}");
     sync_component(component, &version, &target, reporter)?;
+    finish_install(
+        environment,
+        component,
+        &version,
+        &target,
+        skip_sse_build,
+        format!("Skipping sse_runtime Docker image build for engine branch '{branch}'."),
+        reporter,
+    )
+}
+
+fn finish_install<W: Write>(
+    environment: &Environment,
+    component: Component,
+    version: &str,
+    target: &Path,
+    skip_sse_build: bool,
+    skip_build_message: String,
+    reporter: &mut Reporter<'_, W>,
+) -> Result<(), String> {
     if component.kind == ComponentKind::Engine {
         if skip_sse_build {
-            progress(
-                reporter,
-                format!("Skipping sse_runtime Docker image build for engine branch '{branch}'."),
-            )?;
+            progress(reporter, skip_build_message)?;
         } else {
-            build_sse_runtime(environment, &target, reporter)?;
+            build_sse_runtime(environment, target, reporter)?;
         }
     }
-    set_binding(environment, component.binding_key, &version)?;
+    set_binding(environment, component.binding_key, version)?;
     progress(
         reporter,
         format!("Bound {}={version}", component.binding_key),
@@ -545,7 +232,7 @@ fn install_branch<W: Write>(
 /// and several environments may be bound to the same one, so removing a release here says nothing
 /// about what this environment should point at. A branch checkout belongs to this environment
 /// alone, so removing it leaves the binding naming a directory that no longer exists.
-fn uninstall<W: Write>(
+pub(crate) fn uninstall<W: Write>(
     environment: &Environment,
     component: Component,
     version: &str,
@@ -653,7 +340,7 @@ fn run_uv<W: Write>(target: &Path, reporter: &mut Reporter<'_, W>) -> Result<(),
     status.success().then_some(()).ok_or(())
 }
 
-fn build_sse_runtime<W: Write>(
+pub(crate) fn build_sse_runtime<W: Write>(
     environment: &Environment,
     engine: &Path,
     reporter: &mut Reporter<'_, W>,
@@ -729,7 +416,7 @@ fn load_config_value(path: &Path, key: &str) -> Option<String> {
 /// product of the synchronization step: the virtual environment `uv sync` creates, one per project
 /// for the multi-project engine. A static component runs no synchronization step, so extracting it
 /// is all there is to complete.
-fn component_complete(kind: ComponentKind, target: &Path) -> bool {
+pub(crate) fn component_complete(kind: ComponentKind, target: &Path) -> bool {
     match kind {
         ComponentKind::Engine => ENGINE_PROJECTS
             .iter()
@@ -741,7 +428,10 @@ fn component_complete(kind: ComponentKind, target: &Path) -> bool {
     }
 }
 
-fn find_component(components: &'static [Component], name: &str) -> Result<Component, String> {
+pub(crate) fn find_component(
+    components: &'static [Component],
+    name: &str,
+) -> Result<Component, String> {
     components
         .iter()
         .copied()
@@ -781,11 +471,6 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn is_help(args: &[String]) -> bool {
-    args.first()
-        .is_some_and(|arg| matches!(arg.as_str(), "help" | "--help"))
-}
-
 fn progress<W: Write>(
     reporter: &mut Reporter<'_, W>,
     message: impl std::fmt::Display,
@@ -795,14 +480,14 @@ fn progress<W: Write>(
         .map_err(|error| format!("failed to write progress: {error}"))
 }
 
-fn success() -> OperationResult {
+pub(crate) fn success() -> OperationResult {
     OperationResult {
         output: OperationOutput::None,
         exit_code: 0,
     }
 }
 
-fn usage(kind: OperationKind, exit_code: i32) -> OperationResult {
+pub(crate) fn usage(kind: OperationKind, exit_code: i32) -> OperationResult {
     OperationResult {
         output: OperationOutput::Usage(kind),
         exit_code,

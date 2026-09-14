@@ -5,6 +5,7 @@ mod init;
 mod lifecycle;
 mod manager;
 mod operations;
+mod process_recovery;
 
 use harness::TestContext;
 

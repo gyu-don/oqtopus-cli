@@ -5,6 +5,7 @@ use std::env;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
@@ -72,9 +73,13 @@ pub(crate) enum StopStyle {
     Manager,
 }
 
-/// Holds a per-service start lock and removes it on every ordinary return path.
+/// Serializes startup using a kernel lock that is released even after SIGKILL.
+///
+/// The guard file is permanent: unlinking it would allow contenders to lock different inodes.
+/// The directory and its PID are retained only for diagnostics and older CLI compatibility.
 struct StartLock {
     directory: PathBuf,
+    _guard: fs::File,
 }
 
 impl StartLock {
@@ -83,6 +88,22 @@ impl StartLock {
         fs::create_dir_all(&pids)
             .map_err(|error| format!("cannot create service PID directory: {error}"))?;
         let directory = pids.join(format!(".{service}.start.lock"));
+        let guard = open_guard(&pids.join(format!(".{service}.start.guard")))
+            .map_err(|error| format!("cannot open service start lock: {error}"))?;
+
+        // SAFETY: guard owns a valid descriptor. LOCK_NB prevents waiting indefinitely.
+        if unsafe { libc::flock(guard.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::WouldBlock {
+                let owner = running_pid(&directory.join("pid"))
+                    .map(|pid| format!(" (PID {pid})"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "cannot start '{service}'. Another start operation is already in progress{owner}."
+                ));
+            }
+            return Err(format!("cannot acquire service start lock: {error}"));
+        }
 
         match fs::create_dir(&directory) {
             Ok(()) => {}
@@ -119,7 +140,27 @@ impl StartLock {
             let _ = fs::remove_dir(&directory);
             return Err(format!("cannot write service start lock: {error}"));
         }
-        Ok(Self { directory })
+        Ok(Self {
+            directory,
+            _guard: guard,
+        })
+    }
+}
+
+/// Opens the persistent start-guard file for locking.
+///
+/// `flock` needs no write access, so an existing guard is opened read-only: the file outlives
+/// every start, and one created by another user must not lock everyone else out permanently.
+/// Creation still needs write access, and loses to a caller that created the file first.
+fn open_guard(path: &Path) -> io::Result<fs::File> {
+    match fs::File::open(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match OpenOptions::new().create_new(true).write(true).open(path) {
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => fs::File::open(path),
+                result => result,
+            }
+        }
+        result => result,
     }
 }
 
@@ -208,15 +249,25 @@ where
 
     out.flush()
         .map_err(|error| format!("failed to write progress: {error}"))?;
-    let mut child = child_command
-        .spawn()
-        .map_err(|_| format!("failed to start '{service}'. The process exited immediately."))?;
-    let pid = child.id();
-    if let Err(error) = fs::write(&pid_file, format!("{pid}\n")) {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!("failed to write PID file: {error}"));
+    let pid_record = fs::File::create(&pid_file)
+        .map_err(|error| format!("failed to write PID file: {error}"))?;
+    let pid_descriptor = pid_record.as_raw_fd();
+    // Publish the child's PID before executing the service. If this CLI is killed after fork,
+    // the child still records its PID, and its inherited guard descriptor excludes other starts
+    // until exec. Rust opens these descriptors with close-on-exec, so the running service never
+    // retains the startup lock. There is no parent-only spawn-to-PID-write recovery gap.
+    // SAFETY: the callback only uses stack data and async-signal-safe getpid/write calls.
+    // pid_record remains open through spawn; no allocation or Rust locks occur in the child.
+    unsafe {
+        child_command.pre_exec(move || publish_pid(pid_descriptor));
     }
+    let spawned = child_command.spawn();
+    drop(pid_record);
+    let mut child = spawned.map_err(|_| {
+        let _ = fs::remove_file(&pid_file);
+        format!("failed to start '{service}'. The process exited immediately.")
+    })?;
+    let pid = child.id();
 
     if foreground {
         drop(lock);
@@ -245,6 +296,45 @@ where
     line(out, format!("Started {service} (PID {pid})"))?;
     drop(lock);
     Ok(0)
+}
+
+/// Writes a decimal PID without allocation; called between fork and exec.
+fn publish_pid(descriptor: RawFd) -> io::Result<()> {
+    let mut buffer = [0_u8; 12];
+    let mut start = buffer.len() - 1;
+    buffer[start] = b'\n';
+    // SAFETY: getpid has no preconditions and is async-signal-safe.
+    let mut pid = unsafe { libc::getpid() } as u32;
+    loop {
+        start -= 1;
+        buffer[start] = b'0' + (pid % 10) as u8;
+        pid /= 10;
+        if pid == 0 {
+            break;
+        }
+    }
+    while start < buffer.len() {
+        // SAFETY: the descriptor is open and the buffer remains valid for the given length.
+        let written = unsafe {
+            libc::write(
+                descriptor,
+                buffer[start..].as_ptr().cast(),
+                buffer.len() - start,
+            )
+        };
+        if written < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if written == 0 {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        start += written as usize;
+    }
+    Ok(())
 }
 
 /// Stops one process-backed service using the wording of its command family.
@@ -382,8 +472,50 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_env_exports, running_pid};
+    use super::{StartLock, load_env_exports, running_pid};
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn missing_owner_pid_does_not_allow_stealing_a_live_start_lock() {
+        let directory = tempfile::tempdir().expect("create lock fixture");
+        let first = StartLock::acquire(directory.path(), "manager").expect("acquire start lock");
+        // Model the interval before owner PID publication, or an interrupted diagnostic write.
+        fs::remove_file(first.directory.join("pid")).expect("remove diagnostic PID");
+
+        let contender = StartLock::acquire(directory.path(), "manager");
+        assert!(matches!(contender, Err(message) if message.contains("already in progress")));
+
+        drop(first);
+        let retry = StartLock::acquire(directory.path(), "manager");
+        assert!(retry.is_ok(), "normal release must permit another startup");
+    }
+
+    #[test]
+    fn a_guard_file_without_write_permission_still_locks() {
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            // Permission bits do not restrict root, so this case cannot be modeled here.
+            return;
+        }
+        let directory = tempfile::tempdir().expect("create lock fixture");
+        let pids = directory.path().join("pids");
+        fs::create_dir_all(&pids).expect("create PID directory");
+        let guard = pids.join(".manager.start.guard");
+        fs::write(&guard, b"").expect("create guard fixture");
+        // Model a guard left by another user: readable, but not writable by this caller.
+        fs::set_permissions(&guard, fs::Permissions::from_mode(0o444))
+            .expect("drop guard write permission");
+
+        let lock = StartLock::acquire(directory.path(), "manager");
+        assert!(
+            lock.is_ok(),
+            "a read-only guard must not lock out startup: {:?}",
+            lock.err()
+        );
+        let contender = StartLock::acquire(directory.path(), "manager");
+        assert!(matches!(contender, Err(message) if message.contains("already in progress")));
+    }
 
     #[test]
     fn environment_exports_match_the_legacy_reader() {

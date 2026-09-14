@@ -1,10 +1,19 @@
 //! Native read-only Manager commands.
 
+mod components;
+mod lifecycle;
+mod operations;
+mod versions;
+
+pub(crate) use lifecycle::{manager_restart, manager_start, manager_stop};
+pub(crate) use operations::{manager_install, manager_uninstall, manager_update};
+pub(crate) use versions::manager_versions;
+
 use crate::environment::validate_environment;
 use crate::service::{ServiceStatus, running_pid};
 
 pub(crate) struct ManagerInfo {
-    pub(crate) metadata: Vec<u8>,
+    pub(crate) metadata: String,
 }
 
 pub(crate) struct ManagerStatus {

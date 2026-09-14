@@ -6,6 +6,12 @@ use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+/// Diagnostic for metadata whose bytes are not valid UTF-8.
+///
+/// Metadata is a UTF-8 text format. Every command that reads it rejects an undecodable file with
+/// this one message instead of interpreting it lossily or silently treating it as absent.
+pub(crate) const INVALID_UTF8: &str = "invalid .metadata: file is not valid UTF-8.";
+
 /// Returns the first value for `key` from the environment's line-oriented metadata format.
 pub(crate) fn metadata_get<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
     // Split only once because metadata values may themselves contain '='.
@@ -21,45 +27,73 @@ fn metadata_set(contents: &str, key: &str, value: &str) -> String {
     let mut found = false;
     let mut updated = String::new();
 
-    for line in contents.lines() {
-        if line
+    for line in contents.split_inclusive('\n') {
+        let text = metadata_line_text(line);
+        if text
             .split_once('=')
             .is_some_and(|(candidate, _)| candidate == key)
         {
             updated.push_str(key);
             updated.push('=');
             updated.push_str(value);
+            if line.ends_with("\r\n") {
+                updated.push_str("\r\n");
+            } else {
+                updated.push('\n');
+            }
             found = true;
         } else {
             updated.push_str(line);
         }
-        updated.push('\n');
     }
 
     if !found {
+        let ending = appended_line_ending(contents);
+        if !contents.is_empty() && !contents.ends_with('\n') {
+            updated.push_str(ending);
+        }
         updated.push_str(key);
         updated.push('=');
         updated.push_str(value);
-        updated.push('\n');
+        updated.push_str(ending);
     }
 
     updated
 }
 
+/// Line ending for a binding appended to `contents`, following its last terminated line.
+///
+/// An appended binding must not leave a CRLF file with mixed line endings, and a file with no
+/// terminated line at all has nothing to follow, so it gets the format's default.
+fn appended_line_ending(contents: &str) -> &'static str {
+    match contents.rfind('\n') {
+        Some(index) if contents[..index].ends_with('\r') => "\r\n",
+        _ => "\n",
+    }
+}
+
 fn metadata_unset(contents: &str, key: &str) -> String {
     let mut updated = String::new();
 
-    for line in contents.lines() {
-        if !line
+    for line in contents.split_inclusive('\n') {
+        let text = metadata_line_text(line);
+        if !text
             .split_once('=')
             .is_some_and(|(candidate, _)| candidate == key)
         {
             updated.push_str(line);
-            updated.push('\n');
         }
     }
 
     updated
+}
+
+fn metadata_line_text(line: &str) -> &str {
+    if let Some(line) = line.strip_suffix("\r\n") {
+        line
+    } else {
+        line.strip_suffix('\n').unwrap_or(line)
+    }
 }
 
 fn migrate_key(contents: String, old_key: &str, new_key: &str) -> String {
@@ -72,7 +106,7 @@ fn migrate_key(contents: String, old_key: &str, new_key: &str) -> String {
 }
 
 /// Atomically replaces `path` with newly created, owner-writable contents.
-fn replace_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+fn replace_file(path: &Path, contents: &str) -> io::Result<()> {
     // Create and sync a randomly named sibling before rename so readers never observe partially
     // migrated metadata and a stale file cannot block a later process that reuses the same PID.
     let parent = path
@@ -87,7 +121,7 @@ fn replace_file(path: &Path, contents: &[u8]) -> io::Result<()> {
         .prefix(&format!(".{file_name}.tmp."))
         .tempfile_in(parent)?;
 
-    temporary.write_all(contents)?;
+    temporary.write_all(contents.as_bytes())?;
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;
     Ok(())
@@ -122,89 +156,65 @@ pub(crate) fn migrate_metadata_keys(path: &Path) {
     let migrated = migrate_key(migrated, "env_name", "environment_name");
 
     if migrated != contents {
-        let _ = replace_file(path, migrated.as_bytes());
+        let _ = replace_file(path, &migrated);
     }
 }
 
 /// Sets one environment binding while preserving unknown metadata and line order.
 pub(crate) fn set_metadata_value(path: &Path, key: &str, value: &str) -> io::Result<()> {
-    let contents = fs::read(path)?;
-    replace_file(path, &metadata_set_bytes(&contents, key, value))
+    let contents = fs::read_to_string(path)?;
+    replace_file(path, &metadata_set(&contents, key, value))
 }
 
 /// Removes one environment binding while preserving every other metadata line.
 pub(crate) fn unset_metadata_value(path: &Path, key: &str) -> io::Result<()> {
-    let contents = fs::read(path)?;
-    replace_file(path, &metadata_unset_bytes(&contents, key))
-}
-
-// The functions above rewrite metadata as text, which is what the key migration needs: it reads a
-// value before writing it back, and a file it cannot decode is left alone. Binding updates run on
-// metadata the CLI must not damage, so they work on bytes instead and copy every line they do not
-// touch through unchanged, including lines that are not valid UTF-8.
-
-fn metadata_set_bytes(contents: &[u8], key: &str, value: &str) -> Vec<u8> {
-    let prefix = format!("{key}=");
-    let replacement = format!("{key}={value}");
-    let mut updated = Vec::new();
-    let mut found = false;
-    // Splitting on '\n' yields a trailing empty element for a file that ends in a newline; drop it
-    // so a terminated final line is not mistaken for an extra blank one.
-    let lines: Vec<_> = contents.split(|byte| *byte == b'\n').collect();
-    let line_count = lines.len() - usize::from(contents.is_empty() || contents.ends_with(b"\n"));
-    for line in &lines[..line_count] {
-        if line.starts_with(prefix.as_bytes()) {
-            updated.extend_from_slice(replacement.as_bytes());
-            found = true;
-        } else {
-            updated.extend_from_slice(line);
-        }
-        updated.push(b'\n');
-    }
-    if !found {
-        updated.extend_from_slice(replacement.as_bytes());
-        updated.push(b'\n');
-    }
-    updated
-}
-
-fn metadata_unset_bytes(contents: &[u8], key: &str) -> Vec<u8> {
-    let prefix = format!("{key}=");
-    let mut updated = Vec::new();
-    let lines: Vec<_> = contents.split(|byte| *byte == b'\n').collect();
-    let line_count = lines.len() - usize::from(contents.ends_with(b"\n"));
-    for line in &lines[..line_count] {
-        if !line.starts_with(prefix.as_bytes()) {
-            updated.extend_from_slice(line);
-            updated.push(b'\n');
-        }
-    }
-    updated
+    let contents = fs::read_to_string(path)?;
+    replace_file(path, &metadata_unset(&contents, key))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{metadata_set_bytes, metadata_unset_bytes};
+    use super::{metadata_set, metadata_unset};
 
     #[test]
-    fn binding_updates_preserve_non_utf8_unknown_lines() {
-        let contents = b"template=backend\nunknown=\xff\nengine_version=old\n";
-        let updated = metadata_set_bytes(contents, "engine_version", "v1.2.3");
+    fn binding_updates_preserve_utf8_unknown_lines_and_line_endings() {
+        let contents = "template=backend\r\nunknown=東京\r\nengine_version=old\r\n";
+        let updated = metadata_set(contents, "engine_version", "v1.2.3");
         assert_eq!(
             updated,
-            b"template=backend\nunknown=\xff\nengine_version=v1.2.3\n"
+            "template=backend\r\nunknown=東京\r\nengine_version=v1.2.3\r\n"
         );
         assert_eq!(
-            metadata_unset_bytes(&updated, "engine_version"),
-            b"template=backend\nunknown=\xff\n"
+            metadata_unset(&updated, "engine_version"),
+            "template=backend\r\nunknown=東京\r\n"
         );
     }
 
     #[test]
     fn setting_a_binding_in_empty_metadata_does_not_add_a_blank_line() {
         assert_eq!(
-            metadata_set_bytes(b"", "engine_version", "v1.2.3"),
-            b"engine_version=v1.2.3\n"
+            metadata_set("", "engine_version", "v1.2.3"),
+            "engine_version=v1.2.3\n"
+        );
+    }
+
+    #[test]
+    fn appending_a_binding_separates_an_unterminated_unknown_line() {
+        assert_eq!(
+            metadata_set("unknown=café", "engine_version", "v1.2.3"),
+            "unknown=café\nengine_version=v1.2.3\n"
+        );
+    }
+
+    #[test]
+    fn appending_a_binding_follows_crlf_line_endings() {
+        assert_eq!(
+            metadata_set("template=backend\r\n", "engine_version", "v1.2.3"),
+            "template=backend\r\nengine_version=v1.2.3\r\n"
+        );
+        assert_eq!(
+            metadata_set("template=backend\r\nunknown=1", "engine_version", "v1.2.3"),
+            "template=backend\r\nunknown=1\r\nengine_version=v1.2.3\r\n"
         );
     }
 }

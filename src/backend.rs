@@ -1,15 +1,23 @@
 //! Native backend commands and their result data.
 
+mod components;
+mod lifecycle;
+mod operations;
+mod versions;
+
+pub(crate) use lifecycle::{backend_restart, backend_start, backend_stop};
+pub(crate) use operations::{backend_build, backend_install, backend_uninstall, backend_update};
+pub(crate) use versions::backend_versions;
+
 use std::fs;
 use std::path::Path;
 
 use crate::environment::validate_environment;
 use crate::service::{ServiceStatus, running_pid};
 
-/// Validated metadata. Retain source bytes because text output must preserve unknown fields,
-/// line endings, and non-UTF-8 bytes. A future JSON view must define its own parsing contract.
+/// Validated metadata rendered by the `info` command.
 pub(crate) struct BackendInfo {
-    pub(crate) metadata: Vec<u8>,
+    pub(crate) metadata: String,
 }
 
 /// Status of every backend service in the order consumed by the Manager.
@@ -20,12 +28,12 @@ pub(crate) struct BackendStatus {
 pub(crate) enum BackendDeviceStatus {
     Help,
     Invalid,
-    Show(Vec<u8>),
+    Show(String),
     Updated(&'static str),
 }
 
 impl BackendDeviceStatus {
-    /// Exit status for this outcome. An unusable action prints usage and fails, as in Bash.
+    /// Exit status for this outcome. An unusable action prints usage and fails.
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
             Self::Invalid => 1,
@@ -34,6 +42,8 @@ impl BackendDeviceStatus {
     }
 }
 
+/// Every backend service, in the order the Manager consumes. Startup and shutdown order are
+/// separate policies and are named where they differ.
 const SERVICES: [&str; 7] = [
     "core",
     "sse_engine",
@@ -88,7 +98,7 @@ pub(crate) fn backend_device_status(args: &[String]) -> Result<BackendDeviceStat
     }
 
     match args.first() {
-        Some(action) if action == "show" => fs::read(&path)
+        Some(action) if action == "show" => fs::read_to_string(&path)
             .map(BackendDeviceStatus::Show)
             .map_err(|error| format!("failed to read device status file: {error}")),
         Some(action) if action == "active" => update_device_status(&path, "active"),

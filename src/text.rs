@@ -71,7 +71,7 @@ pub(crate) fn write_init(out: &mut impl Write, result: &InitResult) -> io::Resul
 }
 
 pub(crate) fn write_backend_info(out: &mut impl Write, info: &BackendInfo) -> io::Result<()> {
-    out.write_all(&info.metadata)?;
+    out.write_all(info.metadata.as_bytes())?;
     out.flush()
 }
 
@@ -95,7 +95,7 @@ pub(crate) fn write_backend_device_status(
         BackendDeviceStatus::Help | BackendDeviceStatus::Invalid => {
             out.write_all(BACKEND_DEVICE_STATUS_USAGE.as_bytes())?
         }
-        BackendDeviceStatus::Show(contents) => out.write_all(contents)?,
+        BackendDeviceStatus::Show(contents) => out.write_all(contents.as_bytes())?,
         BackendDeviceStatus::Updated(action) => writeln!(out, "{action}")?,
     }
     out.flush()
@@ -105,7 +105,7 @@ pub(crate) fn write_cloud_local_info(
     out: &mut impl Write,
     info: &CloudLocalInfo,
 ) -> io::Result<()> {
-    out.write_all(&info.metadata)?;
+    out.write_all(info.metadata.as_bytes())?;
     out.flush()
 }
 
@@ -125,7 +125,7 @@ pub(crate) fn write_cloud_local_status(
 }
 
 pub(crate) fn write_manager_info(out: &mut impl Write, info: &ManagerInfo) -> io::Result<()> {
-    out.write_all(&info.metadata)?;
+    out.write_all(info.metadata.as_bytes())?;
     out.flush()
 }
 

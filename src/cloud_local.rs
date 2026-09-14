@@ -1,5 +1,14 @@
 //! Native read-only cloud-local commands.
 
+mod components;
+mod lifecycle;
+mod operations;
+mod versions;
+
+pub(crate) use lifecycle::{cloud_local_restart, cloud_local_start, cloud_local_stop};
+pub(crate) use operations::{cloud_local_install, cloud_local_uninstall, cloud_local_update};
+pub(crate) use versions::cloud_local_versions;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -8,7 +17,7 @@ use crate::metadata::metadata_get;
 use crate::service::{ServiceStatus, running_pid};
 
 pub(crate) struct CloudLocalInfo {
-    pub(crate) metadata: Vec<u8>,
+    pub(crate) metadata: String,
 }
 
 pub(crate) struct CloudLocalStatus {
@@ -16,7 +25,13 @@ pub(crate) struct CloudLocalStatus {
     pub(crate) services: Vec<ServiceStatus>,
 }
 
-const PROCESS_SERVICES: [&str; 5] = ["worker", "user_signup", "admin", "provider", "user"];
+/// Every cloud-local service, in the order the Manager consumes. Startup and shutdown order are
+/// separate policies and are named where they differ.
+const SERVICES: [&str; 6] = ["db", "worker", "user_signup", "admin", "provider", "user"];
+
+/// The database runs as Docker Compose containers instead of a PID-backed process, so status,
+/// start, and stop all treat it separately from the rest of the inventory.
+const DATABASE: &str = "db";
 
 pub(crate) fn cloud_local_info(args: &[String]) -> Result<CloudLocalInfo, String> {
     if !args.is_empty() {
@@ -36,8 +51,10 @@ pub(crate) fn cloud_local_status(args: &[String]) -> Result<CloudLocalStatus, St
     let environment = validate_named_environment("cloud-local")?;
     let database_containers = database_containers(&environment);
     let root = &environment.environment.root;
-    let services = PROCESS_SERVICES
-        .into_iter()
+    let services = SERVICES
+        .iter()
+        .copied()
+        .filter(|name| *name != DATABASE)
         .map(|name| ServiceStatus {
             name,
             pid: running_pid(&root.join("pids").join(format!("{name}.pid"))),
@@ -55,8 +72,7 @@ pub(crate) fn cloud_local_status(args: &[String]) -> Result<CloudLocalStatus, St
 /// A `branch:` binding marks a checkout kept inside the environment; every other binding names a
 /// release in the shared install root. Install, uninstall, and build apply the same rule.
 fn cloud_directory(environment: &Environment) -> Option<PathBuf> {
-    let text = String::from_utf8_lossy(&environment.metadata);
-    let version = metadata_get(&text, "cloud_local_cloud_version")?;
+    let version = metadata_get(&environment.metadata, "cloud_local_cloud_version")?;
     if version.starts_with("branch:") {
         Some(environment.root.join("cloud"))
     } else {
@@ -112,8 +128,9 @@ fn container_name(project: &str, service: &str) -> Option<String> {
         return None;
     }
 
-    let name = String::from_utf8_lossy(&output.stdout)
-        .trim_end_matches('\n')
-        .to_owned();
-    (!name.is_empty()).then_some(name)
+    // Compose derives container names from the project and service names, so a reply this command
+    // cannot decode does not name a container it can report on.
+    let name = String::from_utf8(output.stdout).ok()?;
+    let name = name.trim_end_matches('\n');
+    (!name.is_empty()).then(|| name.to_owned())
 }

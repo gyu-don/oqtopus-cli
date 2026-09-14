@@ -2,9 +2,10 @@
 
 use std::cmp::Ordering;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::metadata::metadata_get;
+use crate::metadata::{INVALID_UTF8, metadata_get};
 use crate::remote::{fetch_remote_tags, remote_refs_url};
 
 #[derive(Clone, Copy)]
@@ -42,93 +43,14 @@ impl VersionsResult {
     }
 }
 
-pub(crate) fn backend_versions(args: &[String]) -> Result<VersionsResult, String> {
-    if is_help(args) {
-        return Ok(usage(VersionsKind::Backend, 0));
-    }
-    if args.len() != 1 {
-        return Ok(usage(VersionsKind::Backend, 1));
-    }
-
-    let (component, repository, binding_key) = match args[0].as_str() {
-        "engine" => ("engine", "oqtopus-team/oqtopus-engine", "engine_version"),
-        "tranqu" => ("tranqu", "oqtopus-team/tranqu-server", "tranqu_version"),
-        "gateway" => ("gateway", "oqtopus-team/device-gateway", "gateway_version"),
-        component => return Err(format!("unknown component: {component}")),
-    };
-
-    list_versions(
-        component,
-        repository,
-        binding_key,
-        OptionalEnvironment::load("backend", false),
-    )
-}
-
-pub(crate) fn cloud_local_versions(args: &[String]) -> Result<VersionsResult, String> {
-    if is_help(args) {
-        return Ok(usage(VersionsKind::CloudLocal, 0));
-    }
-    if args.len() != 1 {
-        return Ok(usage(VersionsKind::CloudLocal, 1));
-    }
-
-    let (component, repository, binding_key) = match args[0].as_str() {
-        "cloud" => (
-            "cloud",
-            "oqtopus-team/oqtopus-cloud",
-            "cloud_local_cloud_version",
-        ),
-        "frontend" => (
-            "frontend",
-            "oqtopus-team/oqtopus-frontend",
-            "cloud_local_frontend_version",
-        ),
-        "admin" => (
-            "admin",
-            "oqtopus-team/oqtopus-admin",
-            "cloud_local_admin_version",
-        ),
-        component => return Err(format!("unknown component: {component}")),
-    };
-
-    list_versions(
-        component,
-        repository,
-        binding_key,
-        OptionalEnvironment::load("cloud-local", true),
-    )
-}
-
-pub(crate) fn manager_versions(args: &[String]) -> Result<VersionsResult, String> {
-    if is_help(args) {
-        return Ok(usage(VersionsKind::Manager, 0));
-    }
-    if !args.is_empty() {
-        return Ok(usage(VersionsKind::Manager, 1));
-    }
-
-    list_versions(
-        "manager",
-        "oqtopus-team/oqtopus-manager",
-        "manager_version",
-        OptionalEnvironment::load("manager", false),
-    )
-}
-
-fn is_help(args: &[String]) -> bool {
-    args.first()
-        .is_some_and(|arg| matches!(arg.as_str(), "help" | "--help"))
-}
-
-fn usage(kind: VersionsKind, exit_code: i32) -> VersionsResult {
+pub(crate) fn usage(kind: VersionsKind, exit_code: i32) -> VersionsResult {
     VersionsResult {
         output: VersionsOutput::Usage(kind),
         exit_code,
     }
 }
 
-fn list_versions(
+pub(crate) fn list_versions(
     component: &'static str,
     repository: &str,
     binding_key: &str,
@@ -260,19 +182,34 @@ fn compare_decimal(left: &str, right: &str) -> Ordering {
     left.len().cmp(&right.len()).then_with(|| left.cmp(right))
 }
 
-struct OptionalEnvironment {
+pub(crate) struct OptionalEnvironment {
     metadata: String,
     install_root: PathBuf,
 }
 
 impl OptionalEnvironment {
     /// Loads context only when every field used by the legacy `try_load_*_env` helper is valid.
-    fn load(template_name: &str, require_name: bool) -> Option<Self> {
+    ///
+    /// A directory that is not this template's environment simply supplies no context, so the
+    /// command still lists the remote versions. Metadata that cannot be decoded is reported
+    /// instead: `versions` must not silently drop the markers of an environment it cannot read.
+    pub(crate) fn load(template_name: &str, require_name: bool) -> Result<Option<Self>, String> {
         let path = Path::new(".metadata");
         if !path.is_file() {
-            return None;
+            return Ok(None);
         }
-        let metadata = String::from_utf8_lossy(&fs::read(path).ok()?).into_owned();
+        let metadata = match fs::read_to_string(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                return Err(INVALID_UTF8.to_owned());
+            }
+            Err(_) => return Ok(None),
+        };
+        Ok(Self::from_metadata(metadata, template_name, require_name))
+    }
+
+    /// Applies the legacy field requirements; an unmet one means this directory supplies nothing.
+    fn from_metadata(metadata: String, template_name: &str, require_name: bool) -> Option<Self> {
         if metadata_get(&metadata, "template")? != template_name {
             return None;
         }

@@ -295,11 +295,11 @@ fn backend_info_rejects_bare_template_key() {
 
 #[test]
 fn backend_info_accepts_crlf_and_preserves_output_bytes() {
-    // Rust accepts CRLF during validation, but `info` must still emit and retain the original bytes
-    // instead of normalizing line endings or regenerating the metadata.
+    // UTF-8 metadata may contain fields owned by other components. `info` must emit and retain
+    // those fields and their CRLF line endings without regenerating the file.
     let context = TestContext::new();
     let metadata = format!(
-        "template=backend\r\ninstall_root={}/releases\r\nenvironment_root={}\r\nengine_version=v1.2.3\r\n",
+        "template=backend\r\ninstall_root={}/releases\r\nenvironment_root={}\r\nunknown=東京\r\nengine_version=v1.2.3\r\n",
         context.root().display(),
         context.work_dir().display()
     );
@@ -316,6 +316,62 @@ fn backend_info_accepts_crlf_and_preserves_output_bytes() {
     assert_eq!(
         fs::read(context.work_dir().join(".metadata")).expect("read metadata"),
         metadata.as_bytes()
+    );
+}
+
+#[test]
+fn backend_info_rejects_invalid_utf8_without_rewriting_metadata() {
+    // Metadata is a UTF-8 text format. Unsupported bytes must fail explicitly and remain intact;
+    // silently replacing them would let a later binding update persist corrupted text.
+    let context = TestContext::new();
+    let metadata = format!(
+        "template=backend\ninstall_root={}/releases\nenvironment_root={}\nunknown=",
+        context.root().display(),
+        context.work_dir().display()
+    );
+    let mut bytes = metadata.into_bytes();
+    bytes.extend_from_slice(b"\xff\n");
+    let path = context.work_dir().join(".metadata");
+    fs::write(&path, &bytes).expect("write invalid UTF-8 metadata");
+
+    let output = context
+        .rust_command(["backend", "info"])
+        .output()
+        .expect("run Rust CLI");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"Error: invalid .metadata: file is not valid UTF-8.\n"
+    );
+    assert_eq!(fs::read(path).expect("read unchanged metadata"), bytes);
+}
+
+#[test]
+fn backend_versions_rejects_invalid_utf8_metadata() {
+    // `versions` works without an environment, but an environment it cannot decode is reported
+    // instead of silently listing remote tags with none of the installed markers.
+    let context = TestContext::new();
+    let metadata = format!(
+        "template=backend\ninstall_root={}/releases\nenvironment_root={}\nunknown=",
+        context.root().display(),
+        context.work_dir().display()
+    );
+    let mut bytes = metadata.into_bytes();
+    bytes.extend_from_slice(b"\xff\n");
+    fs::write(context.work_dir().join(".metadata"), &bytes).expect("write invalid UTF-8 metadata");
+
+    let output = context
+        .rust_command(["backend", "versions", "engine"])
+        .output()
+        .expect("run Rust CLI");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"Error: invalid .metadata: file is not valid UTF-8.\n"
     );
 }
 
