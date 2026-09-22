@@ -26,3 +26,9 @@ path = "tests/cli.rs"
 
 [dev-dependencies]
 insta = "1"
+
+[profile.release]
+# Distributed binaries favor size and startup over build time.
+strip = true
+lto = true
+codegen-units = 1
