@@ -1,4 +1,4 @@
-//! Command routing and output orchestration during the incremental Rust migration.
+//! Command routing and output orchestration for the native CLI.
 
 use std::io;
 
@@ -77,12 +77,12 @@ pub(crate) fn route(args: &[String]) -> Route {
     let action = args.get(1).map(String::as_str);
 
     match command {
-        None | Some("help" | "--help") => Route::Help,
+        None | Some("" | "help" | "--help") => Route::Help,
         Some("version" | "--version") => Route::Version,
         Some("init") => Route::Init,
         Some("completion") => Route::Completion,
         Some("backend") => match action {
-            None | Some("help" | "--help") => Route::BackendHelp,
+            None | Some("" | "help" | "--help") => Route::BackendHelp,
             Some("info") => Route::BackendInfo,
             Some("status") => Route::BackendStatus,
             Some("device-status") => Route::BackendDeviceStatus,
@@ -97,7 +97,7 @@ pub(crate) fn route(args: &[String]) -> Route {
             Some(_) => Route::BackendUnknown,
         },
         Some("cloud-local") => match action {
-            None | Some("help" | "--help") => Route::CloudLocalHelp,
+            None | Some("" | "help" | "--help") => Route::CloudLocalHelp,
             Some("info") => Route::CloudLocalInfo,
             Some("status") => Route::CloudLocalStatus,
             Some("versions") => Route::CloudLocalVersions,
@@ -110,7 +110,7 @@ pub(crate) fn route(args: &[String]) -> Route {
             Some(_) => Route::CloudLocalUnknown,
         },
         Some("manager") => match action {
-            None | Some("help" | "--help") => Route::ManagerHelp,
+            None | Some("" | "help" | "--help") => Route::ManagerHelp,
             Some("info") => Route::ManagerInfo,
             Some("status") => Route::ManagerStatus,
             Some("versions") => Route::ManagerVersions,

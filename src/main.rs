@@ -1,8 +1,4 @@
-//! OQTOPUS command-line entry point.
-//!
-//! Commands are being migrated incrementally from the legacy Bash implementation. This crate
-//! handles migrated routes directly and replaces itself with the legacy CLI for all other routes,
-//! preserving command-line compatibility during the transition.
+//! OQTOPUS command-line entry point: signal setup, UTF-8 argument validation, and process exit.
 
 mod archive;
 mod args;
@@ -34,7 +30,20 @@ fn main() {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
-    let args: Vec<String> = env::args().skip(1).collect();
+    let args: Result<Vec<String>, _> = env::args_os()
+        .skip(1)
+        .map(|arg| arg.into_string())
+        .collect();
+    let args = match args {
+        Ok(args) => args,
+        Err(_) => {
+            let _ = text::write_error(
+                &mut std::io::stderr().lock(),
+                "command-line arguments must be valid UTF-8.",
+            );
+            process::exit(1);
+        }
+    };
     let exit_code = cli::run(&args);
     if exit_code != 0 {
         process::exit(exit_code);

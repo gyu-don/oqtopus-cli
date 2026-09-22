@@ -4,7 +4,7 @@
 
 This design covers the review cleanup for PR #35: module responsibilities,
 UTF-8 text handling, and recoverable process startup. It describes the intended
-maintained code, independently of the temporary Bash routing mechanism.
+maintained code, with every CLI route implemented natively.
 
 The cleanup is complete when:
 
@@ -18,15 +18,13 @@ The cleanup is complete when:
   running service; and
 - focused recovery tests and the existing compatibility suite pass.
 
-Completion generation, Bash retirement, release packaging, and installer work
-remain separate migration tasks. This cleanup does not enable those routes or
-claim that the migration is ready to merge.
+Completion generation and release packaging are implemented. Installer work
+remains tracked separately in the migration record.
 
 ## System context
 
-The diagrams describe the current Rust implementation. Solid arrows in this
-context diagram are labeled interactions; the dotted arrow is the temporary
-Bash fallback selected by `cli`. The external OQTOPUS Manager application is a
+The diagrams describe the current Rust implementation. Arrows in this
+context diagram are labeled interactions. The external OQTOPUS Manager application is a
 CLI caller, distinct from the internal `manager` module that manages its service.
 
 ```mermaid
@@ -34,7 +32,6 @@ flowchart LR
     user["User / shell"]
     consumer["OQTOPUS Manager application"]
     cli["oqtopus: Rust CLI"]
-    legacy["Legacy Bash CLI"]
     processes["Managed service processes"]
     docker["Docker Compose / cloud-local database"]
     files["Environment directory<br/>.metadata, config/, pids/, logs/"]
@@ -52,7 +49,6 @@ flowchart LR
     cli -->|"install / update / remove"| installed
     cli -->|"fetch"| remote
     cli -->|"execute"| build
-    cli -.->|"unmatched route: exec"| legacy
 ```
 
 The environment layout and CLI output are compatibility boundaries: the Manager
@@ -74,7 +70,6 @@ submodules. Grouping does not introduce a shared domain dispatcher.
 flowchart TB
     main["main<br/>signals, argv, process exit"]
     cli["cli<br/>route selection, dispatch, output orchestration"]
-    legacy["legacy<br/>temporary Bash exec"]
     init["init<br/>environment template creation"]
     version["version<br/>compiled CLI version"]
     domains["backend / cloud_local / manager<br/>command policy, service inventory, sequencing<br/>components / lifecycle / operations / versions"]
@@ -98,7 +93,6 @@ flowchart TB
     cli --> init
     cli --> version
     cli --> text
-    cli -.-> legacy
     domains --> args
     domains --> environment
     domains --> metadata
@@ -129,8 +123,8 @@ Entry points: [main](../src/main.rs), [cli](../src/cli.rs),
 
 `main` owns process-wide signal setup, argument acquisition, and process exit.
 `cli` owns routing, command dispatch, stream selection, final rendering, and
-mapping command outcomes to exit codes. The temporary legacy route is selected
-here before any strict native parsing.
+mapping command outcomes to exit codes. Arguments are validated as UTF-8 once
+in `main`; invalid arguments receive a rendered error and exit status 1.
 
 `backend`, `cloud_local`, and `manager` own their command argument handling,
 environment requirements, component definitions, service command construction,

@@ -21,7 +21,7 @@ pub(crate) fn backend_install<W: Write>(
         return Ok(usage(OperationKind::BackendInstall, 0));
     }
     let environment = validate_environment("backend")?;
-    let Some(component_name) = args.first() else {
+    let Some(component_name) = args.first().filter(|arg| !arg.is_empty()) else {
         return Ok(usage(OperationKind::BackendInstall, 1));
     };
     let mut version = "";

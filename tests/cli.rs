@@ -34,7 +34,7 @@ fn version_uses_the_compiled_package_version() {
 }
 
 #[test]
-fn non_utf8_arguments_abort_before_routing() {
+fn non_utf8_arguments_report_an_error_before_routing() {
     // Non-UTF-8 arguments are not supported. Such an invocation must fail before any routing
     // decision, so it reaches neither an unknown-command error nor a migrated command.
     let unsupported = OsStr::from_bytes(b"\xff");
@@ -47,16 +47,38 @@ fn non_utf8_arguments_abort_before_routing() {
             .output()
             .expect("Rust CLI should run");
 
-        // Argument collection panics; with the default unwind strategy that is exit status 101.
-        assert_eq!(output.status.code(), Some(101), "wrong status for {args:?}");
+        // Invalid argv is rejected once at the process boundary.
+        assert_eq!(output.status.code(), Some(1), "wrong status for {args:?}");
         assert!(
             output.stdout.is_empty(),
             "stdout was not empty for {args:?}"
         );
-        // No routed command reported this failure as its own error.
-        assert!(
-            !output.stderr.starts_with(b"Error: "),
-            "failure was reported as a command error for {args:?}"
+        assert_eq!(
+            output.stderr,
+            b"Error: command-line arguments must be valid UTF-8.\n"
         );
+    }
+}
+
+#[test]
+fn empty_command_words_show_help() {
+    for prefix in [
+        vec![],
+        vec!["backend"],
+        vec!["cloud-local"],
+        vec!["manager"],
+    ] {
+        let run = |word| {
+            Command::new(env!("CARGO_BIN_EXE_oqtopus"))
+                .args(&prefix)
+                .arg(word)
+                .output()
+                .unwrap()
+        };
+        let empty = run("");
+        let help = run("help");
+        assert_eq!(empty.status.code(), Some(0));
+        assert!(empty.stderr.is_empty());
+        assert_eq!(empty.stdout, help.stdout);
     }
 }

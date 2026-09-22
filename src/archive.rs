@@ -1,6 +1,6 @@
 //! Safe extraction of GitHub source archives with their top-level directory removed.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::Cursor;
 use std::path::{Component as PathComponent, Path, PathBuf};
@@ -33,14 +33,14 @@ pub(crate) fn extract_github_archive(bytes: &[u8], target: &Path) -> Result<(), 
 /// Validates the complete entry graph before creating anything.
 ///
 /// A safe symlink may point elsewhere inside the extracted tree, but no archive entry may use a
-/// symlink as its parent. The latter rule avoids relying on filesystem path resolution during
-/// extraction and also prevents a chain of otherwise innocuous links from becoming an escape.
+/// symlink as its parent. This keeps extraction from writing through links; target validation
+/// separately resolves the complete link graph to catch escapes through chains and pivots.
 fn inspect_archive(bytes: &[u8]) -> Result<(), ()> {
     let decoder = GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
     let entries = archive.entries().map_err(|_| ())?;
     let mut paths = Vec::new();
-    let mut symlinks = Vec::new();
+    let mut symlinks = HashMap::new();
     let mut seen = HashSet::new();
 
     for entry in entries {
@@ -62,8 +62,7 @@ fn inspect_archive(bytes: &[u8]) -> Result<(), ()> {
         }
         if entry_type.is_symlink() {
             let link = entry.link_name().map_err(|_| ())?.ok_or(())?;
-            validate_symlink_target(&relative, &link)?;
-            symlinks.push(relative.clone());
+            symlinks.insert(relative.clone(), link.into_owned());
         } else if !entry_type.is_dir() && !entry_type.is_file() {
             return Err(());
         }
@@ -72,10 +71,13 @@ fn inspect_archive(bytes: &[u8]) -> Result<(), ()> {
 
     if paths.iter().any(|path| {
         symlinks
-            .iter()
+            .keys()
             .any(|symlink| path != symlink && path.starts_with(symlink))
     }) {
         return Err(());
+    }
+    for (path, link) in &symlinks {
+        validate_symlink_target(path, link, &symlinks)?;
     }
     Ok(())
 }
@@ -95,31 +97,66 @@ fn stripped_path(path: &Path) -> Result<PathBuf, ()> {
     Ok(relative)
 }
 
-/// Rejects a symbolic link whose target would resolve outside the extraction directory.
-///
-/// The target is resolved lexically against the link's own directory. `resolved` is only ever
-/// inspected through its depth: as long as every `..` has a component to pop, the target stays at
-/// or below the extraction root, so a failing pop is exactly the escape this rejects. An absolute
-/// target escapes regardless of depth and is rejected outright.
-fn validate_symlink_target(path: &Path, link: &Path) -> Result<(), ()> {
-    let mut resolved: Vec<_> = path
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
+/// Resolves links before applying `..`, matching filesystem traversal rather than lexical depth.
+fn validate_symlink_target(
+    path: &Path,
+    link: &Path,
+    symlinks: &HashMap<PathBuf, PathBuf>,
+) -> Result<(), ()> {
+    let mut resolved = path.parent().unwrap_or_else(|| Path::new("")).to_owned();
+    let mut pending = link
         .components()
-        .filter_map(|component| match component {
-            PathComponent::Normal(part) => Some(part.to_owned()),
-            _ => None,
-        })
-        .collect();
-    for component in link.components() {
-        match component {
-            PathComponent::Normal(part) => resolved.push(part.to_owned()),
+        .map(|part| part.as_os_str().to_owned())
+        .collect::<VecDeque<_>>();
+    let mut followed = 0;
+    while let Some(part) = pending.pop_front() {
+        match Path::new(&part).components().next().ok_or(())? {
+            PathComponent::Normal(_) => {
+                resolved.push(&part);
+                if let Some(target) = symlinks.get(&resolved) {
+                    followed += 1;
+                    if followed > 40 {
+                        return Err(());
+                    }
+                    resolved.pop();
+                    for component in target.components().rev() {
+                        pending.push_front(component.as_os_str().to_owned());
+                    }
+                }
+            }
             PathComponent::CurDir => {}
             PathComponent::ParentDir => {
-                resolved.pop().ok_or(())?;
+                if !resolved.pop() {
+                    return Err(());
+                }
             }
             PathComponent::RootDir | PathComponent::Prefix(_) => return Err(()),
         }
+    }
+    Ok(())
+}
+
+/// Revalidates a subtree before relocation: links must stay inside the copied template itself.
+pub(crate) fn validate_directory_symlinks(root: &Path) -> Result<(), ()> {
+    let mut pending = vec![root.to_owned()];
+    let mut symlinks = HashMap::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).map_err(|_| ())? {
+            let entry = entry.map_err(|_| ())?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|_| ())?;
+            if kind.is_symlink() {
+                symlinks.insert(
+                    path.strip_prefix(root).map_err(|_| ())?.to_owned(),
+                    fs::read_link(path).map_err(|_| ())?,
+                );
+            } else if kind.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    for (path, link) in &symlinks {
+        validate_symlink_target(path, link, &symlinks)?;
     }
     Ok(())
 }
@@ -145,6 +182,40 @@ mod tests {
     use flate2::write::GzEncoder;
     use std::fs;
     use tar::{Builder, EntryType, Header};
+
+    #[test]
+    fn resolves_pivots_before_parent_components_and_rejects_cycles() {
+        use std::collections::HashMap;
+        use std::path::{Path, PathBuf};
+        let links = HashMap::from([
+            (PathBuf::from("pivot"), PathBuf::from(".")),
+            (PathBuf::from("cycle"), PathBuf::from("cycle")),
+        ]);
+        assert!(
+            super::validate_symlink_target(
+                Path::new("escape"),
+                Path::new("pivot/../outside"),
+                &links
+            )
+            .is_err()
+        );
+        assert!(
+            super::validate_symlink_target(Path::new("safe"), Path::new("pivot/file"), &links)
+                .is_ok()
+        );
+        assert!(
+            super::validate_symlink_target(Path::new("loop"), Path::new("cycle"), &links).is_err()
+        );
+    }
+
+    #[test]
+    fn relocated_template_links_must_stay_inside_the_template() {
+        let root = tempfile::tempdir().unwrap();
+        let template = root.path().join("templates/backend");
+        fs::create_dir_all(&template).unwrap();
+        std::os::unix::fs::symlink("../outside", template.join("config")).unwrap();
+        assert!(super::validate_directory_symlinks(&template).is_err());
+    }
 
     #[test]
     fn rejects_a_symlink_escape_before_writing_any_entry() {

@@ -11,6 +11,24 @@ const PROCESS_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[test]
+fn stop_succeeds_when_foreground_cleanup_removes_the_pid_file() {
+    let context = manager_context();
+    let trace = context.root().join("uv-invocations");
+    let mut cleanup = ServiceCleanup::new(&context, &trace);
+    install_long_running_uv(&context);
+    let mut command = start_command(&context, &trace, None);
+    command.arg("--foreground");
+    let mut foreground = ChildGuard::spawn(command);
+    wait_until("foreground service readiness", PROCESS_TIMEOUT, || {
+        invocation_count(&trace) == 1
+    });
+    stop_manager(&context);
+    assert!(!foreground.wait_for_exit(PROCESS_TIMEOUT).success());
+    assert!(!context.work_dir().join("pids/manager.pid").exists());
+    cleanup.disarm();
+}
+
+#[test]
 fn simultaneous_starts_launch_the_service_once() {
     let context = manager_context();
     let trace = context.root().join("uv-invocations");

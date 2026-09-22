@@ -229,7 +229,11 @@ are specified separately in the runtime architecture document.
 - `version` prints only the version compiled into the executable and never
   contacts the network. The `OQTOPUS_CLI_VERSION` environment variable is no
   longer consulted. This is tested by direct comparison, not by snapshot, and
-  packaging must inject the correct version at build time.
+  Cargo embeds `[package].version` from `Cargo.toml` through `CARGO_PKG_VERSION`.
+  Release packaging does not inject or rewrite it: `release.yml` verifies that
+  the tag is exactly `v` followed by that version. Before each release, maintainers
+  must bump `Cargo.toml` and update `Cargo.lock`, as described in the
+  [release procedure](../docs/developer_guidelines/development_flow.md#release-procedure).
 - Automatic migration of old `.metadata` keys, such as `env_root` to
   `environment_root`, is preserved for backward compatibility, including when
   it is triggered by read-only commands.
@@ -253,10 +257,9 @@ are specified separately in the runtime architecture document.
 - Command-line arguments are required to be valid UTF-8. Bash forwards arbitrary
   bytes, but no supported invocation needs them, and carrying `OsString` through
   routing and every command signature costs more than the capability is worth.
-  An invocation with non-UTF-8 arguments therefore aborts in `std::env::args`
-  before reaching either implementation, which is the standard library's own
-  handling of the case. This is pinned by a Rust-only test rather than a
-  characterization case, because Bash accepts the same invocation.
+  Arguments are collected with `args_os()` and validated once at the process
+  boundary. Invalid UTF-8 produces `Error: command-line arguments must be valid
+  UTF-8.` on stderr with exit status 1 and no stdout, before routing.
 - `backend device-status` reports a failed write as
   `Error: failed to write device status file: <reason>` rather than the shell
   redirection error Bash emits. The exit status is unchanged, and no consumer
@@ -266,6 +269,8 @@ are specified separately in the runtime architecture document.
   lookup aborts the command before any line is printed. Rust omits the
   unreadable container from the `db: Running (...)` annotation and still prints
   every service row, which is what the Manager's line-by-line parsing expects.
+  If multiple containers match a service, only the first name is included so
+  the annotation cannot introduce additional rows.
 - Native `versions` commands do not reproduce diagnostics emitted directly by
   a failing `curl` process. They preserve the CLI-owned error message and exit
   status; no downstream consumer parses the removed tool-specific diagnostic.
@@ -327,7 +332,12 @@ GitHub archive extraction validates every entry before writing. Absolute or
 escaping symbolic-link targets, hard links, special entries, duplicate paths,
 and entries nested beneath an archive-provided symbolic link are rejected.
 Extraction also refuses to traverse a symbolic link already present below the
-target directory. A regression test verifies that a link followed by a nested
+target directory. Link targets are resolved through the complete link graph before
+applying parent components; cycles and chains exceeding 40 links are rejected.
+Before `init` copies a template subtree, it revalidates links relative to that
+subtree, since a link inside the archive could escape the relocated environment.
+Regression tests cover pivot links, relocation, and external-file preservation.
+A regression test verifies that a link followed by a nested
 file cannot overwrite a file outside the target.
 
 ## Completion during the hybrid period

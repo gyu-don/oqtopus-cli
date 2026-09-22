@@ -32,9 +32,10 @@ pub(crate) fn cloud_local_start<W: Write, E: Write>(
         return Ok(usage(LifecycleKind::CloudLocalStart, 0));
     }
     let environment = validate_named_environment("cloud-local")?;
-    let Some(target) = args.first() else {
+    let Some(target) = args.first().filter(|arg| !arg.is_empty()) else {
         return Ok(usage(LifecycleKind::CloudLocalStart, 1));
     };
+    // Trailing start arguments remain ignored for compatibility with the established CLI behavior.
     let foreground = args.get(1).is_some_and(|arg| arg == "--foreground");
     if target == "all" {
         if foreground {
@@ -133,16 +134,23 @@ fn cloud_command(environment: &NamedEnvironment, service: &str) -> Result<Servic
         ));
     }
     let command = match service {
-        "worker" => ServiceCommand::uv(vec![
-            "run".into(),
-            "--project".into(),
-            cloud.display().to_string(),
-            "python".into(),
-            cloud
-                .join("backend/oqtopus_cloud/worker/pending_jobs_updater/local_scheduler.py")
-                .display()
-                .to_string(),
-        ]),
+        "worker" => {
+            let mut command = ServiceCommand::uv(vec![
+                "run".into(),
+                "--project".into(),
+                cloud.display().to_string(),
+                "python".into(),
+                cloud
+                    .join("backend/oqtopus_cloud/worker/pending_jobs_updater/local_scheduler.py")
+                    .display()
+                    .to_string(),
+            ]);
+            command.environment = vec![
+                ("POWERTOOLS_METRICS_NAMESPACE", "pending-jobs-updater"),
+                ("POWERTOOLS_SERVICE_NAME", "pending-jobs-updater"),
+            ];
+            command
+        }
         "user" | "provider" | "admin" | "user_signup" => {
             let (namespace, module, port_var, default_port) = match service {
                 "user" => (
@@ -259,7 +267,7 @@ fn start_database<W: Write, E: Write>(
     // The characterization suite cannot open loopback sockets in every sandbox. As with the
     // HTTP fixture hooks, this explicit test hook bypasses only the wait; subsequent setup still
     // executes through the same commands and paths as production.
-    let mut reachable = env::var_os("OQTOPUS_FORBID_LEGACY_FALLBACK").is_some()
+    let mut reachable = env::var_os("OQTOPUS_TEST_MODE").is_some()
         && env::var_os("OQTOPUS_TEST_DB_PORT_READY").is_some();
     if !reachable {
         for attempt in 0..30 {

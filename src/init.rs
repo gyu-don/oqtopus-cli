@@ -5,11 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::archive::extract_github_archive;
+use crate::archive::{extract_github_archive, validate_directory_symlinks};
 use crate::remote::fetch_url;
 
 const DEFAULT_TEMPLATE_BRANCH: &str = "main";
-const FORBID_LEGACY_FALLBACK: &str = "OQTOPUS_FORBID_LEGACY_FALLBACK";
+const TEST_MODE: &str = "OQTOPUS_TEST_MODE";
 
 #[derive(Clone, Copy)]
 pub(crate) enum EnvironmentTemplate {
@@ -179,6 +179,8 @@ fn download_template(
             template.name()
         )
     })?;
+    validate_directory_symlinks(&source)
+        .map_err(|()| format!("unsafe symbolic link in {} template.", template.name()))?;
     copy_directory_contents(&source, target)
         .map_err(|error| format!("failed to copy {} template: {error}", template.name()))
 }
@@ -282,11 +284,10 @@ fn install_root(template: EnvironmentTemplate) -> Result<PathBuf, String> {
 
 /// Returns the creation timestamp stamped into a new environment's metadata.
 ///
-/// Snapshots would otherwise differ on every run, so tests pin the value. As with the HTTP
-/// fixtures, the override is readable only under the fallback-forbidden test mode and cannot
-/// affect a normal invocation.
+/// Snapshots would otherwise differ on every run, so characterization tests pin the value.
+/// The override is available only when the explicit test mode is enabled.
 fn created_at() -> Result<String, String> {
-    if env::var_os(FORBID_LEGACY_FALLBACK).is_some()
+    if env::var_os(TEST_MODE).is_some()
         && let Ok(value) = env::var("OQTOPUS_TEST_CREATED_AT")
     {
         return Ok(value);

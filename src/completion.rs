@@ -1,8 +1,7 @@
 //! Shell completion script generation.
 //!
-//! The candidate word lists mirror `bin/oqtopus`'s hand-written bash/zsh/fish completion
-//! functions verbatim; there is no shared command model yet (that waits for the `clap` slice), so
-//! this is a deliberate, tracked duplication rather than an oversight.
+//! Candidate lists are maintained alongside the route table. Generated scripts are pinned by
+//! compatibility snapshots until completion and parsing share a command model.
 
 use crate::args::is_help;
 

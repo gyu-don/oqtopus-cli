@@ -5,12 +5,12 @@ use crate::harness::{EnvironmentTemplate, REMOTE_REFS_FIXTURE, TestContext};
 
 const SERVICES: [&str; 6] = ["db", "worker", "user_signup", "admin", "provider", "user"];
 
-/// Minimal `docker` stand-in: reports the database as running and names one container per
+/// Minimal `docker` stand-in: reports the database as running and names multiple containers for one
 /// compose service, so status output does not depend on a real Docker daemon.
 const DOCKER_STUB: &str = r#"#!/bin/sh
 case "$*" in
   *"ps --status running --quiet db"*) echo db-id ;;
-  *"service=db"*) echo characterization-db-1 ;;
+  *"service=db"*) printf 'characterization-db-1\ncharacterization-db-2\n' ;;
   *"service=minio"*) echo characterization-minio-1 ;;
   *"service=mc"*) echo characterization-mc-1 ;;
 esac

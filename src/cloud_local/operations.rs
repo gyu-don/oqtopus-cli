@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use crate::args::is_help;
-use crate::environment::validate_environment;
+use crate::environment::validate_named_environment;
 use crate::operations::{
     OperationKind, OperationOutcome, find_component, install_release, install_version, success,
     uninstall, usage,
@@ -19,8 +19,8 @@ pub(crate) fn cloud_local_install<W: Write>(
     if is_help(args) {
         return Ok(usage(OperationKind::CloudLocalInstall, 0));
     }
-    let environment = validate_environment("cloud-local")?;
-    let Some(component_name) = args.first() else {
+    let environment = validate_named_environment("cloud-local")?.environment;
+    let Some(component_name) = args.first().filter(|arg| !arg.is_empty()) else {
         return Ok(usage(OperationKind::CloudLocalInstall, 1));
     };
     let mut version = "";
@@ -63,7 +63,7 @@ pub(crate) fn cloud_local_uninstall<W: Write>(
     if is_help(args) {
         return Ok(usage(OperationKind::CloudLocalUninstall, 0));
     }
-    let environment = validate_environment("cloud-local")?;
+    let environment = validate_named_environment("cloud-local")?.environment;
     if args.len() != 2 || args[0].is_empty() || args[1].is_empty() {
         return Ok(usage(OperationKind::CloudLocalUninstall, 1));
     }
@@ -79,7 +79,7 @@ pub(crate) fn cloud_local_update<W: Write>(
     if is_help(args) {
         return Ok(usage(OperationKind::CloudLocalUpdate, 0));
     }
-    let environment = validate_environment("cloud-local")?;
+    let environment = validate_named_environment("cloud-local")?.environment;
     if args.len() != 1 || args[0].is_empty() {
         return Ok(usage(OperationKind::CloudLocalUpdate, 1));
     }

@@ -131,6 +131,6 @@ fn container_name(project: &str, service: &str) -> Option<String> {
     // Compose derives container names from the project and service names, so a reply this command
     // cannot decode does not name a container it can report on.
     let name = String::from_utf8(output.stdout).ok()?;
-    let name = name.trim_end_matches('\n');
+    let name = name.lines().next()?;
     (!name.is_empty()).then(|| name.to_owned())
 }

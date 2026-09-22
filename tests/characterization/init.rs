@@ -253,6 +253,72 @@ fn init_rejects_a_template_archive_with_an_escaping_symlink() {
     assert!(fs::symlink_metadata(context.work_dir().join("demo/escape")).is_err());
 }
 
+#[test]
+fn init_rejects_pivot_escapes_before_copying_or_rendering() {
+    for (target, expected) in [
+        (
+            "../pivot/../../../outside",
+            "Error: failed to extract backend template archive.\n",
+        ),
+        (
+            "../pivot/../../outside",
+            "Error: unsafe symbolic link in backend template.\n",
+        ),
+    ] {
+        let context = TestContext::new();
+        let outside = context.root().join("outside");
+        fs::write(&outside, "{{ env_name }}").unwrap();
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for directory in [
+            "source/templates",
+            "source/templates/backend",
+            "source/templates/backend/config",
+        ] {
+            let mut header = Header::new_gnu();
+            header.set_entry_type(EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, directory, &[][..])
+                .unwrap();
+        }
+        // Put the pivot last to ensure validation uses the complete graph, independent of order.
+        for (name, destination) in [("config/.env", target), ("pivot", ".")] {
+            let mut header = Header::new_gnu();
+            header.set_entry_type(EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            header.set_link_name(destination).unwrap();
+            header.set_cksum();
+            archive
+                .append_data(
+                    &mut header,
+                    format!("source/templates/backend/{name}"),
+                    &[][..],
+                )
+                .unwrap();
+        }
+        let bytes = archive.into_inner().unwrap().finish().unwrap();
+        let output = context.run_snapshot_subject_with_template_archive(
+            ["init", "demo", "--template", "backend"],
+            Some(&bytes),
+            MAIN_ARCHIVE_URL,
+            CREATED_AT,
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.stderr, expected.as_bytes());
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "{{ env_name }}");
+        assert!(
+            fs::read_dir(context.work_dir().join("demo"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+}
+
 fn template_archive(context: &TestContext, include_backend: bool) -> Vec<u8> {
     let source = context.root().join("archive-source/oqtopus-cli-fixture");
     let templates = source.join("templates");

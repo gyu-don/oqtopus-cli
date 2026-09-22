@@ -19,7 +19,7 @@ pub(crate) fn backend_start<W: Write>(
         return Ok(usage(LifecycleKind::BackendStart, 0));
     }
     let environment = validate_environment("backend")?;
-    let Some(target) = args.first() else {
+    let Some(target) = args.first().filter(|arg| !arg.is_empty()) else {
         return Ok(usage(LifecycleKind::BackendStart, 1));
     };
     let foreground = args.get(1).is_some_and(|arg| arg == "--foreground");

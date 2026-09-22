@@ -337,6 +337,14 @@ fn publish_pid(descriptor: RawFd) -> io::Result<()> {
     Ok(())
 }
 
+// Foreground cleanup may have removed the PID file before the stop caller observes exit.
+fn remove_pid_file(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 /// Stops one process-backed service using the wording of its command family.
 pub(crate) fn stop_process<W: Write>(
     root: &Path,
@@ -347,7 +355,7 @@ pub(crate) fn stop_process<W: Write>(
     let pid_file = root.join("pids").join(format!("{service}.pid"));
     let Some(pid) = running_pid(&pid_file) else {
         if pid_file.is_file() {
-            fs::remove_file(&pid_file)
+            remove_pid_file(&pid_file)
                 .map_err(|error| format!("failed to remove stale PID file: {error}"))?;
         }
         let message = match style {
@@ -369,7 +377,7 @@ pub(crate) fn stop_process<W: Write>(
     for _ in 0..5 {
         thread::sleep(Duration::from_secs(1));
         if running_pid(&pid_file).is_none() {
-            fs::remove_file(&pid_file)
+            remove_pid_file(&pid_file)
                 .map_err(|error| format!("failed to remove PID file: {error}"))?;
             let message = match style {
                 StopStyle::CloudLocal => format!("Stopped {service} (PID {pid})"),
@@ -475,6 +483,18 @@ mod tests {
     use super::{StartLock, load_env_exports, running_pid};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn pid_cleanup_tolerates_absence_but_preserves_other_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let pid = root.path().join("service.pid");
+        super::remove_pid_file(&pid).unwrap();
+        fs::write(&pid, "123").unwrap();
+        super::remove_pid_file(&pid).unwrap();
+        super::remove_pid_file(&pid).unwrap();
+        fs::create_dir(&pid).unwrap();
+        assert!(super::remove_pid_file(&pid).is_err());
+    }
 
     #[test]
     fn missing_owner_pid_does_not_allow_stealing_a_live_start_lock() {

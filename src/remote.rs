@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Read;
 
 const GITHUB_BASE_URL: &str = "https://github.com";
-const FORBID_LEGACY_FALLBACK: &str = "OQTOPUS_FORBID_LEGACY_FALLBACK";
+const TEST_MODE: &str = "OQTOPUS_TEST_MODE";
 
 pub(crate) fn remote_refs_url(repository: &str) -> String {
     format!("{GITHUB_BASE_URL}/{repository}.git/info/refs?service=git-upload-pack")
@@ -36,14 +36,14 @@ pub(crate) fn resolve_branch_commit(repository: &str, branch: &str) -> Result<St
 }
 
 pub(crate) fn fetch_url(url: &str) -> Result<Vec<u8>, ()> {
-    // The fixture hook is available only under the existing fallback-forbidden test mode, so it
-    // does not affect a normal invocation unless that explicit test mode is also enabled.
+    // The fixture hook is gated by the explicit test mode used by characterization tests;
+    // production invocations use the real HTTP transport.
     //
     // Two hooks exist because commands differ in how many requests they make. The manifest maps
     // several URLs to several responses, for commands that resolve a ref and then download an
     // archive. The single-response hook answers every request with the same bytes, optionally
     // asserting the URL, which is what a one-request command needs.
-    if env::var_os(FORBID_LEGACY_FALLBACK).is_some()
+    if env::var_os(TEST_MODE).is_some()
         && let Some(path) = env::var_os("OQTOPUS_TEST_HTTP_FIXTURE_MANIFEST")
     {
         let manifest = fs::read_to_string(path).map_err(|_| ())?;
@@ -53,7 +53,7 @@ pub(crate) fn fetch_url(url: &str) -> Result<Vec<u8>, ()> {
         });
         return fs::read(fixture.ok_or(())?).map_err(|_| ());
     }
-    if env::var_os(FORBID_LEGACY_FALLBACK).is_some()
+    if env::var_os(TEST_MODE).is_some()
         && let Some(path) = env::var_os("OQTOPUS_TEST_HTTP_RESPONSE_FILE")
     {
         if let Ok(expected) = env::var("OQTOPUS_TEST_EXPECTED_HTTP_URL")

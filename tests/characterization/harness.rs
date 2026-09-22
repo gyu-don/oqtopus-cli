@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 /// Gates the test-only HTTP fixture, port-readiness, and clock-override hooks in `src/`, so they
-/// stay inert outside this harness regardless of the (now-retired) legacy fallback the name refers
-/// to. Shared by name only: each consuming module still declares its own copy of this constant.
-const TEST_MODE: &str = "OQTOPUS_FORBID_LEGACY_FALLBACK";
+/// stay inert outside this harness.
+const TEST_MODE: &str = "OQTOPUS_TEST_MODE";
 
 pub const REMOTE_REFS_FIXTURE: &[u8] =
     b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n\

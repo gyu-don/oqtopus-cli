@@ -123,6 +123,15 @@ fn process_services_start_and_stop_without_fallback() {
             "run --project <RELEASE> uvicorn oqtopus_cloud.user.lambda_function:app --host 0.0.0.0 --port 8080 --reload --log-level debug",
         ),
         (
+            EnvironmentTemplate::CloudLocal,
+            ("cloud_local_cloud_version", "v1.2.3"),
+            "cloud-local/releases/cloud-v1.2.3",
+            &["cloud-local", "start", "worker", "ignored"],
+            &["cloud-local", "stop", "worker"],
+            Some("logs/worker"),
+            "run --project <RELEASE> python <RELEASE>/backend/oqtopus_cloud/worker/pending_jobs_updater/local_scheduler.py",
+        ),
+        (
             EnvironmentTemplate::Manager,
             ("manager_version", "v1.2.3"),
             "manager/releases/manager-v1.2.3",
@@ -175,7 +184,15 @@ fn process_services_start_and_stop_without_fallback() {
                 .is_some_and(|line| line.ends_with("|loaded"))
         );
         if template == EnvironmentTemplate::CloudLocal {
-            assert_eq!(actual.lines().nth(1), Some("user-api|user-api|loaded"));
+            let namespace = if start_args[2] == "worker" {
+                "pending-jobs-updater"
+            } else {
+                "user-api"
+            };
+            assert_eq!(
+                actual.lines().nth(1),
+                Some(format!("{namespace}|{namespace}|loaded").as_str())
+            );
         }
 
         let stopped = context
@@ -417,6 +434,53 @@ fn foreground_services_propagate_exit_status_and_clean_pid() {
                 .work_dir()
                 .join(format!("pids/.{service}.start.lock"))
                 .exists()
+        );
+    }
+}
+
+#[test]
+fn empty_start_and_install_targets_show_usage() {
+    for (template, domain) in [
+        (EnvironmentTemplate::Backend, "backend"),
+        (EnvironmentTemplate::CloudLocal, "cloud-local"),
+    ] {
+        let context = TestContext::new();
+        context.create_environment(template, &[]);
+        for action in ["start", "install"] {
+            for suffix in [vec![""], vec!["", "extra"]] {
+                let output = context
+                    .rust_command([vec![domain, action], suffix].concat())
+                    .output()
+                    .unwrap();
+                let help = context
+                    .rust_command([domain, action, "help"])
+                    .output()
+                    .unwrap();
+                assert_eq!(output.status.code(), Some(1));
+                assert_eq!(output.stdout, help.stdout);
+                assert!(output.stderr.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn cloud_operations_require_name_before_install_root() {
+    for action in ["install", "uninstall", "update"] {
+        let context = TestContext::new();
+        context.write_metadata(format!(
+            "template=cloud-local\nenvironment_root={}\n",
+            context.work_dir().display()
+        ));
+        let output = context
+            .rust_command(["cloud-local", action, "cloud"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            b"Error: invalid .metadata: missing environment_name.\n"
         );
     }
 }
