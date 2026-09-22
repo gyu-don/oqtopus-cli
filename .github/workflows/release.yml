@@ -78,7 +78,8 @@ jobs:
 
       - name: Package
         run: |
-          name="oqtopus-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          # A dispatch run names the ref after a branch, which may contain a slash.
+          name="oqtopus-${GITHUB_REF_NAME//\//-}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           cp target/${{ matrix.target }}/release/oqtopus "dist/$name/"
           cp LICENSE README.md "dist/$name/"
