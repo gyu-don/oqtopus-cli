@@ -9,6 +9,7 @@ mod args;
 mod backend;
 mod cli;
 mod cloud_local;
+mod completion;
 mod environment;
 mod init;
 mod legacy;

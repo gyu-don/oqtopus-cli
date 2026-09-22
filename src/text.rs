@@ -7,6 +7,7 @@ use std::io::{self, Write};
 
 use crate::backend::{BackendDeviceStatus, BackendInfo, BackendStatus};
 use crate::cloud_local::{CloudLocalInfo, CloudLocalStatus};
+use crate::completion::{CompletionOutcome, CompletionOutput};
 use crate::init::{InitOutcome, InitOutput};
 use crate::lifecycle::{LifecycleKind, LifecycleOutcome, LifecycleOutput};
 use crate::manager::{ManagerInfo, ManagerStatus};
@@ -251,6 +252,19 @@ fn write_process_status(out: &mut impl Write, service: &ServiceStatus) -> io::Re
     } else {
         writeln!(out, "{}: Stopped", service.name)
     }
+}
+
+const COMPLETION_USAGE: &str = "\
+Usage:
+  oqtopus completion <bash|zsh|fish>
+";
+
+pub(crate) fn write_completion(out: &mut impl Write, result: &CompletionOutcome) -> io::Result<()> {
+    match result.output {
+        CompletionOutput::Usage => out.write_all(COMPLETION_USAGE.as_bytes())?,
+        CompletionOutput::Script(script) => out.write_all(script.as_bytes())?,
+    }
+    out.flush()
 }
 
 pub(crate) fn write_error(out: &mut impl Write, message: &str) -> io::Result<()> {

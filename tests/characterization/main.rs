@@ -1,5 +1,6 @@
 mod backend;
 mod cloud_local;
+mod completion;
 mod harness;
 mod init;
 mod lifecycle;

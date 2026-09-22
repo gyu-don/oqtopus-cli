@@ -12,6 +12,7 @@ use crate::cloud_local::{
     cloud_local_status, cloud_local_stop, cloud_local_uninstall, cloud_local_update,
     cloud_local_versions,
 };
+use crate::completion::completion;
 use crate::init::init;
 use crate::legacy::run_legacy;
 use crate::manager::{
@@ -32,6 +33,7 @@ pub(crate) enum Route {
     Help,
     Version,
     Init,
+    Completion,
     BackendInfo,
     BackendStatus,
     BackendDeviceStatus,
@@ -74,6 +76,7 @@ pub(crate) fn route(args: &[String]) -> Route {
         (None, _) | (Some("help" | "--help"), _) => Route::Help,
         (Some("version" | "--version"), _) => Route::Version,
         (Some("init"), _) => Route::Init,
+        (Some("completion"), _) => Route::Completion,
         (Some("backend"), Some("info")) => Route::BackendInfo,
         (Some("backend"), Some("status")) => Route::BackendStatus,
         (Some("backend"), Some("device-status")) => Route::BackendDeviceStatus,
@@ -109,9 +112,10 @@ pub(crate) fn route(args: &[String]) -> Route {
 
 /// Executes one CLI invocation and returns its process exit status.
 pub(crate) fn run(args: &[String]) -> i32 {
-    // Template subcommands consume two leading words. `init` consumes only its top-level word.
+    // Template subcommands consume two leading words. `init` and `completion` consume only their
+    // top-level word.
     let command_args = args.get(2..).unwrap_or_default();
-    let init_args = args.get(1..).unwrap_or_default();
+    let top_level_args = args.get(1..).unwrap_or_default();
 
     // Commands report their own exit status; a returned message is always a failure.
     //
@@ -126,10 +130,15 @@ pub(crate) fn run(args: &[String]) -> i32 {
         Route::Version => text::write_version(&mut io::stdout().lock(), &version_info())
             .map(|()| EXIT_SUCCESS)
             .map_err(|error| format!("failed to write version: {error}")),
-        Route::Init => init(init_args).and_then(|result| {
+        Route::Init => init(top_level_args).and_then(|result| {
             text::write_init(&mut io::stdout().lock(), &result)
                 .map(|()| result.exit_code())
                 .map_err(|error| format!("failed to write init result: {error}"))
+        }),
+        Route::Completion => completion(top_level_args).and_then(|result| {
+            text::write_completion(&mut io::stdout().lock(), &result)
+                .map(|()| result.exit_code())
+                .map_err(|error| format!("failed to write completion result: {error}"))
         }),
         Route::BackendInfo => backend_info(command_args).and_then(|info| {
             text::write_backend_info(&mut io::stdout().lock(), &info)
