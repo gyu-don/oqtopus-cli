@@ -32,19 +32,19 @@ pub(crate) enum VersionsOutput {
     List(VersionList),
 }
 
-pub(crate) struct VersionsResult {
+pub(crate) struct VersionsOutcome {
     pub(crate) output: VersionsOutput,
     exit_code: i32,
 }
 
-impl VersionsResult {
+impl VersionsOutcome {
     pub(crate) fn exit_code(&self) -> i32 {
         self.exit_code
     }
 }
 
-pub(crate) fn usage(kind: VersionsKind, exit_code: i32) -> VersionsResult {
-    VersionsResult {
+pub(crate) fn usage(kind: VersionsKind, exit_code: i32) -> VersionsOutcome {
+    VersionsOutcome {
         output: VersionsOutput::Usage(kind),
         exit_code,
     }
@@ -55,7 +55,7 @@ pub(crate) fn list_versions(
     repository: &str,
     binding_key: &str,
     environment: Option<OptionalEnvironment>,
-) -> Result<VersionsResult, String> {
+) -> Result<VersionsOutcome, String> {
     let canonical_url = remote_refs_url(repository);
     let advertised_tags = fetch_remote_tags(repository)
         .map_err(|_| format!("failed to query GitHub tags API: {canonical_url}"))?;
@@ -97,7 +97,7 @@ pub(crate) fn list_versions(
         })
         .collect();
 
-    Ok(VersionsResult {
+    Ok(VersionsOutcome {
         output: VersionsOutput::List(VersionList { component, entries }),
         exit_code: 0,
     })

@@ -254,7 +254,7 @@ fn lifecycle_stdout(
     command: impl FnOnce(
         &mut io::StdoutLock<'_>,
         &mut io::StderrLock<'_>,
-    ) -> Result<crate::lifecycle::LifecycleResult, String>,
+    ) -> Result<crate::lifecycle::LifecycleOutcome, String>,
 ) -> Result<i32, String> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
@@ -266,7 +266,7 @@ fn lifecycle_stdout(
 }
 
 fn operation_stdout(
-    command: impl FnOnce(&mut io::StdoutLock<'_>) -> Result<crate::operations::OperationResult, String>,
+    command: impl FnOnce(&mut io::StdoutLock<'_>) -> Result<crate::operations::OperationOutcome, String>,
     write_error_context: &str,
 ) -> Result<i32, String> {
     let mut stdout = io::stdout().lock();

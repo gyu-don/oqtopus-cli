@@ -20,28 +20,28 @@ pub(crate) enum LifecycleOutput {
     Usage(LifecycleKind),
 }
 
-pub(crate) struct LifecycleResult {
+pub(crate) struct LifecycleOutcome {
     pub(crate) output: LifecycleOutput,
     exit_code: i32,
 }
 
-impl LifecycleResult {
+impl LifecycleOutcome {
     pub(crate) fn exit_code(&self) -> i32 {
         self.exit_code
     }
 }
 
-pub(crate) fn success() -> LifecycleResult {
+pub(crate) fn success() -> LifecycleOutcome {
     result_code(0)
 }
-pub(crate) fn result_code(exit_code: i32) -> LifecycleResult {
-    LifecycleResult {
+pub(crate) fn result_code(exit_code: i32) -> LifecycleOutcome {
+    LifecycleOutcome {
         output: LifecycleOutput::None,
         exit_code,
     }
 }
-pub(crate) fn usage(kind: LifecycleKind, exit_code: i32) -> LifecycleResult {
-    LifecycleResult {
+pub(crate) fn usage(kind: LifecycleKind, exit_code: i32) -> LifecycleOutcome {
+    LifecycleOutcome {
         output: LifecycleOutput::Usage(kind),
         exit_code,
     }

@@ -30,17 +30,12 @@ pub(crate) enum OperationKind {
     ManagerUpdate,
 }
 
-pub(crate) enum OperationOutput {
-    None,
-    Usage(OperationKind),
-}
-
-pub(crate) struct OperationResult {
-    pub(crate) output: OperationOutput,
+pub(crate) struct OperationOutcome {
+    pub(crate) usage: Option<OperationKind>,
     exit_code: i32,
 }
 
-impl OperationResult {
+impl OperationOutcome {
     pub(crate) fn exit_code(&self) -> i32 {
         self.exit_code
     }
@@ -480,16 +475,16 @@ fn progress<W: Write>(
         .map_err(|error| format!("failed to write progress: {error}"))
 }
 
-pub(crate) fn success() -> OperationResult {
-    OperationResult {
-        output: OperationOutput::None,
+pub(crate) fn success() -> OperationOutcome {
+    OperationOutcome {
+        usage: None,
         exit_code: 0,
     }
 }
 
-pub(crate) fn usage(kind: OperationKind, exit_code: i32) -> OperationResult {
-    OperationResult {
-        output: OperationOutput::Usage(kind),
+pub(crate) fn usage(kind: OperationKind, exit_code: i32) -> OperationOutcome {
+    OperationOutcome {
+        usage: Some(kind),
         exit_code,
     }
 }

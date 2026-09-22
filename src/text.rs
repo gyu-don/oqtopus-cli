@@ -7,13 +7,13 @@ use std::io::{self, Write};
 
 use crate::backend::{BackendDeviceStatus, BackendInfo, BackendStatus};
 use crate::cloud_local::{CloudLocalInfo, CloudLocalStatus};
-use crate::init::{InitOutput, InitResult};
-use crate::lifecycle::{LifecycleKind, LifecycleOutput, LifecycleResult};
+use crate::init::{InitOutcome, InitOutput};
+use crate::lifecycle::{LifecycleKind, LifecycleOutcome, LifecycleOutput};
 use crate::manager::{ManagerInfo, ManagerStatus};
-use crate::operations::{OperationKind, OperationOutput, OperationResult};
+use crate::operations::{OperationKind, OperationOutcome};
 use crate::service::ServiceStatus;
 use crate::version::VersionInfo;
-use crate::versions::{VersionsKind, VersionsOutput, VersionsResult};
+use crate::versions::{VersionsKind, VersionsOutcome, VersionsOutput};
 
 const TOP_LEVEL_HELP: &str = "\
 Usage:
@@ -55,7 +55,7 @@ pub(crate) fn write_version(out: &mut impl Write, info: &VersionInfo) -> io::Res
     out.flush()
 }
 
-pub(crate) fn write_init(out: &mut impl Write, result: &InitResult) -> io::Result<()> {
+pub(crate) fn write_init(out: &mut impl Write, result: &InitOutcome) -> io::Result<()> {
     match &result.output {
         InitOutput::Usage => out.write_all(INIT_USAGE.as_bytes())?,
         InitOutput::Created { template, root } => {
@@ -134,7 +134,7 @@ pub(crate) fn write_manager_status(out: &mut impl Write, status: &ManagerStatus)
     out.flush()
 }
 
-pub(crate) fn write_versions(out: &mut impl Write, result: &VersionsResult) -> io::Result<()> {
+pub(crate) fn write_versions(out: &mut impl Write, result: &VersionsOutcome) -> io::Result<()> {
     match &result.output {
         VersionsOutput::Usage(VersionsKind::Backend) => {
             out.write_all(b"Usage:\n  oqtopus backend versions <engine|tranqu|gateway>\n")?
@@ -172,14 +172,14 @@ pub(crate) fn write_versions(out: &mut impl Write, result: &VersionsResult) -> i
 ///
 /// A successful install, build, uninstall, or update has already streamed its progress through the
 /// reporter, so there is nothing left to render here beyond flushing.
-pub(crate) fn write_operation(out: &mut impl Write, result: &OperationResult) -> io::Result<()> {
-    if let OperationOutput::Usage(kind) = result.output {
+pub(crate) fn write_operation(out: &mut impl Write, result: &OperationOutcome) -> io::Result<()> {
+    if let Some(kind) = result.usage {
         out.write_all(operation_usage(kind).as_bytes())?;
     }
     out.flush()
 }
 
-pub(crate) fn write_lifecycle(out: &mut impl Write, result: &LifecycleResult) -> io::Result<()> {
+pub(crate) fn write_lifecycle(out: &mut impl Write, result: &LifecycleOutcome) -> io::Result<()> {
     if let LifecycleOutput::Usage(kind) = result.output {
         out.write_all(lifecycle_usage(kind).as_bytes())?;
     }

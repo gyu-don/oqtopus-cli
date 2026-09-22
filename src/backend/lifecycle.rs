@@ -2,39 +2,19 @@
 
 use std::io::Write;
 
-use crate::args::{is_help, single_target, validate_member};
+use crate::args::{is_help, single_target};
 use crate::environment::{Environment, validate_environment};
-use crate::lifecycle::{LifecycleKind, LifecycleResult, result_code, success, usage};
+use crate::lifecycle::{LifecycleKind, LifecycleOutcome, result_code, success, usage};
 use crate::metadata::metadata_get;
 use crate::service::{BackgroundOutput, ServiceCommand, StopStyle, start_process, stop_process};
 use crate::text::write_error;
 
-use super::SERVICES;
-
-// Startup follows dependency order; shutdown reverses it. Status uses SERVICES order.
-const START_ORDER: [&str; 7] = [
-    "gateway",
-    "tranqu",
-    "mitigator",
-    "estimator",
-    "combiner",
-    "sse_engine",
-    "core",
-];
-const STOP_ORDER: [&str; 7] = [
-    "core",
-    "sse_engine",
-    "combiner",
-    "estimator",
-    "mitigator",
-    "tranqu",
-    "gateway",
-];
+use super::services::BackendService;
 
 pub(crate) fn backend_start<W: Write>(
     args: &[String],
     out: &mut W,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::BackendStart, 0));
     }
@@ -50,21 +30,18 @@ pub(crate) fn backend_start<W: Write>(
         if foreground {
             return Err("oqtopus backend start all does not support --foreground. Start one service at a time in foreground mode.".into());
         }
-        for service in START_ORDER {
-            start_backend_service(&environment, service, false, out)?;
-        }
+        start_all(&environment, out)
     } else {
-        let code = start_backend_service(&environment, target, foreground, out)?;
-        return Ok(result_code(code));
+        let code = start_backend_service(&environment, target.parse()?, foreground, out)?;
+        Ok(result_code(code))
     }
-    Ok(success())
 }
 
 pub(crate) fn backend_stop<W: Write, E: Write>(
     args: &[String],
     out: &mut W,
     err: &mut E,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::BackendStop, 0));
     }
@@ -73,19 +50,18 @@ pub(crate) fn backend_stop<W: Write, E: Write>(
         return Ok(usage(LifecycleKind::BackendStop, 1));
     };
     if target == "all" {
-        let failed = stop_many(&environment, &STOP_ORDER, out, err);
-        return Ok(result_code(failed as i32));
+        Ok(result_code(stop_all(&environment, out, err) as i32))
+    } else {
+        stop_backend_service(&environment, target.parse()?, out)?;
+        Ok(success())
     }
-    validate_member(target, &SERVICES)?;
-    stop_process(&environment.root, target, StopStyle::Backend, out)?;
-    Ok(success())
 }
 
 pub(crate) fn backend_restart<W: Write, E: Write>(
     args: &[String],
     out: &mut W,
     err: &mut E,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::BackendRestart, 0));
     }
@@ -94,30 +70,49 @@ pub(crate) fn backend_restart<W: Write, E: Write>(
         return Ok(usage(LifecycleKind::BackendRestart, 1));
     };
     if target == "all" {
-        if stop_many(&environment, &STOP_ORDER, out, err) {
-            return Ok(result_code(1));
-        }
-        for service in START_ORDER {
-            start_backend_service(&environment, service, false, out)?;
-        }
+        restart_all(&environment, out, err)
     } else {
-        validate_member(target, &SERVICES)?;
-        stop_process(&environment.root, target, StopStyle::Backend, out)?;
-        start_backend_service(&environment, target, false, out)?;
+        restart_backend_service(&environment, target.parse()?, out)
     }
+}
+
+fn start_all<W: Write>(environment: &Environment, out: &mut W) -> Result<LifecycleOutcome, String> {
+    for service in BackendService::START_ORDER {
+        start_backend_service(environment, service, false, out)?;
+    }
+    Ok(success())
+}
+
+fn restart_all<W: Write, E: Write>(
+    environment: &Environment,
+    out: &mut W,
+    err: &mut E,
+) -> Result<LifecycleOutcome, String> {
+    if stop_all(environment, out, err) {
+        return Ok(result_code(1));
+    }
+    start_all(environment, out)
+}
+
+fn restart_backend_service<W: Write>(
+    environment: &Environment,
+    service: BackendService,
+    out: &mut W,
+) -> Result<LifecycleOutcome, String> {
+    stop_backend_service(environment, service, out)?;
+    start_backend_service(environment, service, false, out)?;
     Ok(success())
 }
 
 fn start_backend_service<W: Write>(
     environment: &Environment,
-    service: &str,
+    service: BackendService,
     foreground: bool,
     out: &mut W,
 ) -> Result<i32, String> {
-    validate_member(service, &SERVICES)?;
     start_process(
         &environment.root,
-        service,
+        service.name(),
         || backend_command(environment, service),
         foreground,
         BackgroundOutput::Null,
@@ -126,16 +121,21 @@ fn start_backend_service<W: Write>(
     )
 }
 
-fn backend_command(environment: &Environment, service: &str) -> Result<ServiceCommand, String> {
+fn backend_command(
+    environment: &Environment,
+    service: BackendService,
+) -> Result<ServiceCommand, String> {
     let (component, project_name, module) = match service {
-        "core" | "sse_engine" => ("engine", Some("core"), "oqtopus_engine_core.app"),
-        "mitigator" => ("engine", Some("mitigator"), "oqtopus_engine_mitigator.app"),
-        "estimator" => ("engine", Some("estimator"), "oqtopus_engine_estimator.app"),
-        "combiner" => ("engine", Some("combiner"), "oqtopus_engine_combiner.app"),
-        "tranqu" => ("tranqu", None, "tranqu_server.proto.service"),
-        "gateway" => ("gateway", None, "device_gateway.service"),
-        _ => return Err(format!("unknown service: {service}")),
+        BackendService::Core | BackendService::SseEngine => {
+            ("engine", Some("core"), "oqtopus_engine_core.app")
+        }
+        BackendService::Mitigator => ("engine", Some("mitigator"), "oqtopus_engine_mitigator.app"),
+        BackendService::Estimator => ("engine", Some("estimator"), "oqtopus_engine_estimator.app"),
+        BackendService::Combiner => ("engine", Some("combiner"), "oqtopus_engine_combiner.app"),
+        BackendService::Tranqu => ("tranqu", None, "tranqu_server.proto.service"),
+        BackendService::Gateway => ("gateway", None, "device_gateway.service"),
     };
+    let service = service.name();
     let metadata = environment.metadata.as_str();
     let version = metadata_get(metadata, &format!("{component}_version")).ok_or_else(|| {
         format!("cannot start '{service}'. Missing {component}_version in .metadata.")
@@ -178,15 +178,18 @@ fn backend_command(environment: &Environment, service: &str) -> Result<ServiceCo
     ]))
 }
 
-fn stop_many<W: Write, E: Write>(
+fn stop_backend_service<W: Write>(
     environment: &Environment,
-    services: &[&str],
+    service: BackendService,
     out: &mut W,
-    err: &mut E,
-) -> bool {
+) -> Result<(), String> {
+    stop_process(&environment.root, service.name(), StopStyle::Backend, out)
+}
+
+fn stop_all<W: Write, E: Write>(environment: &Environment, out: &mut W, err: &mut E) -> bool {
     let mut failed = false;
-    for service in services {
-        if let Err(error) = stop_process(&environment.root, service, StopStyle::Backend, out) {
+    for service in BackendService::START_ORDER.into_iter().rev() {
+        if let Err(error) = stop_backend_service(environment, service, out) {
             let _ = write_error(err, &error);
             failed = true;
         }

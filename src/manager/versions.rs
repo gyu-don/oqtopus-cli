@@ -1,11 +1,11 @@
 //! Manager component version command.
 
 use crate::args::is_help;
-use crate::versions::{OptionalEnvironment, VersionsKind, VersionsResult, list_versions, usage};
+use crate::versions::{OptionalEnvironment, VersionsKind, VersionsOutcome, list_versions, usage};
 
 use super::components::COMPONENT;
 
-pub(crate) fn manager_versions(args: &[String]) -> Result<VersionsResult, String> {
+pub(crate) fn manager_versions(args: &[String]) -> Result<VersionsOutcome, String> {
     if is_help(args) {
         return Ok(usage(VersionsKind::Manager, 0));
     }

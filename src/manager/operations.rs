@@ -5,7 +5,7 @@ use std::io::Write;
 use crate::args::is_help;
 use crate::environment::validate_environment;
 use crate::operations::{
-    OperationKind, OperationResult, install_release, install_version, success, uninstall, usage,
+    OperationKind, OperationOutcome, install_release, install_version, success, uninstall, usage,
 };
 use crate::progress::Reporter;
 
@@ -14,7 +14,7 @@ use super::components::COMPONENT;
 pub(crate) fn manager_install<W: Write>(
     args: &[String],
     out: &mut W,
-) -> Result<OperationResult, String> {
+) -> Result<OperationOutcome, String> {
     if is_help(args) {
         return Ok(usage(OperationKind::ManagerInstall, 0));
     }
@@ -44,7 +44,7 @@ pub(crate) fn manager_install<W: Write>(
 pub(crate) fn manager_uninstall<W: Write>(
     args: &[String],
     out: &mut W,
-) -> Result<OperationResult, String> {
+) -> Result<OperationOutcome, String> {
     if is_help(args) {
         return Ok(usage(OperationKind::ManagerUninstall, 0));
     }
@@ -59,7 +59,7 @@ pub(crate) fn manager_uninstall<W: Write>(
 pub(crate) fn manager_update<W: Write>(
     args: &[String],
     out: &mut W,
-) -> Result<OperationResult, String> {
+) -> Result<OperationOutcome, String> {
     if is_help(args) {
         return Ok(usage(OperationKind::ManagerUpdate, 0));
     }

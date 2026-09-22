@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::args::{is_help, single_target, validate_member};
 use crate::environment::{Environment, NamedEnvironment, validate_named_environment};
-use crate::lifecycle::{LifecycleKind, LifecycleResult, line, result_code, success, usage};
+use crate::lifecycle::{LifecycleKind, LifecycleOutcome, line, result_code, success, usage};
 use crate::metadata::metadata_get;
 use crate::service::{
     BackgroundOutput, ServiceCommand, StopStyle, ensure_command, load_env_exports, start_process,
@@ -27,7 +27,7 @@ pub(crate) fn cloud_local_start<W: Write, E: Write>(
     args: &[String],
     out: &mut W,
     err: &mut E,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::CloudLocalStart, 0));
     }
@@ -54,7 +54,7 @@ pub(crate) fn cloud_local_stop<W: Write, E: Write>(
     args: &[String],
     out: &mut W,
     err: &mut E,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::CloudLocalStop, 0));
     }
@@ -75,7 +75,7 @@ pub(crate) fn cloud_local_restart<W: Write, E: Write>(
     args: &[String],
     out: &mut W,
     err: &mut E,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::CloudLocalRestart, 0));
     }

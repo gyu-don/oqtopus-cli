@@ -36,18 +36,18 @@ pub(crate) enum InitOutput {
     },
 }
 
-pub(crate) struct InitResult {
+pub(crate) struct InitOutcome {
     pub(crate) output: InitOutput,
     exit_code: i32,
 }
 
-impl InitResult {
+impl InitOutcome {
     pub(crate) fn exit_code(&self) -> i32 {
         self.exit_code
     }
 }
 
-pub(crate) fn init(args: &[String]) -> Result<InitResult, String> {
+pub(crate) fn init(args: &[String]) -> Result<InitOutcome, String> {
     if args
         .first()
         .is_some_and(|arg| matches!(arg.as_str(), "help" | "--help"))
@@ -98,8 +98,8 @@ pub(crate) fn init(args: &[String]) -> Result<InitResult, String> {
     create_environment(target, environment_name, template, branch)
 }
 
-fn usage(exit_code: i32) -> InitResult {
-    InitResult {
+fn usage(exit_code: i32) -> InitOutcome {
+    InitOutcome {
         output: InitOutput::Usage,
         exit_code,
     }
@@ -127,7 +127,7 @@ fn create_environment(
     environment_name: &str,
     template: EnvironmentTemplate,
     branch: &str,
-) -> Result<InitResult, String> {
+) -> Result<InitOutcome, String> {
     fs::create_dir_all(target)
         .map_err(|error| format!("failed to create environment directory: {error}"))?;
     let root = fs::canonicalize(target)
@@ -150,7 +150,7 @@ fn create_environment(
     fs::write(root.join(".metadata"), metadata)
         .map_err(|error| format!("failed to write environment metadata: {error}"))?;
 
-    Ok(InitResult {
+    Ok(InitOutcome {
         output: InitOutput::Created { template, root },
         exit_code: 0,
     })

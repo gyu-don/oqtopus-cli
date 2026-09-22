@@ -4,14 +4,14 @@ use std::io::Write;
 
 use crate::args::is_help;
 use crate::environment::{Environment, validate_environment};
-use crate::lifecycle::{LifecycleKind, LifecycleResult, result_code, success, usage};
+use crate::lifecycle::{LifecycleKind, LifecycleOutcome, result_code, success, usage};
 use crate::metadata::metadata_get;
 use crate::service::{BackgroundOutput, ServiceCommand, StopStyle, start_process, stop_process};
 
 pub(crate) fn manager_start<W: Write>(
     args: &[String],
     out: &mut W,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::ManagerStart, 0));
     }
@@ -35,7 +35,7 @@ pub(crate) fn manager_start<W: Write>(
 pub(crate) fn manager_stop<W: Write>(
     args: &[String],
     out: &mut W,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::ManagerStop, 0));
     }
@@ -50,7 +50,7 @@ pub(crate) fn manager_stop<W: Write>(
 pub(crate) fn manager_restart<W: Write>(
     args: &[String],
     out: &mut W,
-) -> Result<LifecycleResult, String> {
+) -> Result<LifecycleOutcome, String> {
     if is_help(args) {
         return Ok(usage(LifecycleKind::ManagerRestart, 0));
     }

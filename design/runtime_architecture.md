@@ -22,7 +22,110 @@ Completion generation, Bash retirement, release packaging, and installer work
 remain separate migration tasks. This cleanup does not enable those routes or
 claim that the migration is ready to merge.
 
+## System context
+
+The diagrams describe the current Rust implementation. Solid arrows in this
+context diagram are labeled interactions; the dotted arrow is the temporary
+Bash fallback selected by `cli`. The external OQTOPUS Manager application is a
+CLI caller, distinct from the internal `manager` module that manages its service.
+
+```mermaid
+flowchart LR
+    user["User / shell"]
+    consumer["OQTOPUS Manager application"]
+    cli["oqtopus: Rust CLI"]
+    legacy["Legacy Bash CLI"]
+    processes["Managed service processes"]
+    docker["Docker Compose / cloud-local database"]
+    files["Environment directory<br/>.metadata, config/, pids/, logs/"]
+    installed["Component installation directories"]
+    remote["GitHub repositories<br/>templates, tags, archives"]
+    build["External installation / build tools"]
+
+    user -->|"argv, environment, working directory"| cli
+    consumer -->|"subprocess invocation"| cli
+    cli -->|"stdout, stderr, exit status"| user
+    cli -->|"text results and incremental progress"| consumer
+    cli -->|"start, inspect, stop"| processes
+    cli -->|"database lifecycle"| docker
+    cli -->|"read / write"| files
+    cli -->|"install / update / remove"| installed
+    cli -->|"fetch"| remote
+    cli -->|"execute"| build
+    cli -.->|"unmatched route: exec"| legacy
+```
+
+The environment layout and CLI output are compatibility boundaries: the Manager
+also reads environment files directly. Background process output is redirected
+to a service log or discarded according to domain policy. Foreground services
+inherit the CLI's standard streams.
+
 ## Responsibilities and dependencies
+
+### Module map
+
+Arrows below mean calls or dependencies on shared types, not execution order.
+The map shows the main responsibility boundaries rather than every import.
+The three domain modules are grouped to avoid repeating their common edges;
+each owns its own `components`, `lifecycle`, `operations`, and `versions`
+submodules. Grouping does not introduce a shared domain dispatcher.
+
+```mermaid
+flowchart TB
+    main["main<br/>signals, argv, process exit"]
+    cli["cli<br/>route selection, dispatch, output orchestration"]
+    legacy["legacy<br/>temporary Bash exec"]
+    init["init<br/>environment template creation"]
+    version["version<br/>compiled CLI version"]
+    domains["backend / cloud_local / manager<br/>command policy, service inventory, sequencing<br/>components / lifecycle / operations / versions"]
+
+    subgraph shared["Shared mechanisms and result types"]
+        args["args<br/>argument checks"]
+        environment["environment<br/>environment validation"]
+        metadata["metadata<br/>UTF-8 metadata editing"]
+        service["service<br/>PID inspection, start lock, spawn, stop"]
+        lifecycle["lifecycle<br/>result types and progress-line helper"]
+        operations["operations<br/>install, update support, remove, build"]
+        versions["versions<br/>component version discovery"]
+        remote["remote<br/>HTTP and Git ref discovery"]
+        archive["archive<br/>archive extraction"]
+        progress["progress<br/>incremental notifications and flushing"]
+    end
+    text["text<br/>final result and error rendering"]
+
+    main --> cli
+    cli --> domains
+    cli --> init
+    cli --> version
+    cli --> text
+    cli -.-> legacy
+    domains --> args
+    domains --> environment
+    domains --> metadata
+    domains --> service
+    domains --> lifecycle
+    domains --> operations
+    domains --> versions
+    environment --> metadata
+    operations --> metadata
+    operations --> versions
+    operations --> remote
+    operations --> archive
+    operations --> progress
+    versions --> metadata
+    versions --> remote
+    init --> remote
+    init --> archive
+```
+
+Command-specific results return to `cli` for rendering through `text`. Progress
+can be written during execution through `progress` or explicit flushed writes;
+it does not wait for final result rendering. `version` describes the CLI binary,
+while `versions` discovers component releases and installed versions.
+
+Entry points: [main](../src/main.rs), [cli](../src/cli.rs),
+[backend](../src/backend.rs), [cloud_local](../src/cloud_local.rs),
+[manager](../src/manager.rs), and [init](../src/init.rs).
 
 `main` owns process-wide signal setup, argument acquisition, and process exit.
 `cli` owns routing, command dispatch, stream selection, final rendering, and
@@ -84,6 +187,77 @@ explain current requirements and invariants; historical Bash explanations belong
 in migration decisions when they are needed to justify compatibility.
 
 ## Process startup and termination
+
+### Process-backed service startup
+
+This sequence follows [service::start_process](../src/service.rs), called by a
+domain's lifecycle module after environment validation. It covers one
+process-backed service; multi-service ordering remains in the domain. The
+cloud-local database uses Docker Compose and has a separate startup path.
+Arrows represent calls, file operations, and returned outcomes over time.
+
+```mermaid
+sequenceDiagram
+    participant CLI as cli
+    participant Domain as Domain lifecycle
+    participant Env as environment
+    participant Service as service::start_process
+    participant OS as OS / environment files
+    participant Child as Child process
+
+    CLI->>Domain: start(args, output)
+    Domain->>Env: Validate environment
+    Env-->>Domain: Environment or error
+    Note over Domain,Service: Continue only after successful validation and argument checks
+    Domain->>Service: Start service with command factory
+    Service->>OS: Acquire nonblocking flock on persistent start.guard
+    alt Lock unavailable or live legacy lock owner
+        Service-->>Domain: Startup error; no child spawned
+    else Lock acquired and legacy lock checked / recovered
+        Service->>OS: Inspect recorded service PID
+        alt Service already running
+            Service->>OS: Release startup lock
+            Service-->>Domain: Report skipped start; success
+        else No running service
+            Service->>OS: Remove stale PID file, if present
+            Service->>Domain: Construct service command
+            Domain-->>Service: Program, arguments, environment
+            Service->>OS: Load config/.env and configure standard streams
+            Service->>Service: Flush pending progress
+            Service->>OS: Open service PID file
+            Service->>Child: Spawn with inherited guard and PID descriptors
+            Child->>OS: Publish own PID before exec
+            Child->>Child: exec service command
+            Note over OS,Child: Close-on-exec closes child guard descriptor; parent retains lock
+            alt Spawn / pre-exec / exec fails
+                Service->>OS: Remove PID file and release lock
+                Service-->>Domain: Startup error
+            else Foreground service
+                Service->>OS: Release startup lock
+                Service->>Child: Wait for completion
+                Child-->>Service: Exit status
+                Service->>OS: Remove matching PID file
+                Service-->>Domain: Child exit code
+            else Background service
+                Service->>Child: Check for immediate exit after 200 ms
+                alt Child already exited
+                    Service->>OS: Remove PID file and release lock
+                    Service-->>Domain: Startup error
+                else Child still running
+                    Service->>OS: Release startup lock after progress output
+                    Service-->>Domain: Startup success
+                end
+            end
+        end
+    end
+    Domain-->>CLI: Lifecycle result or error
+```
+
+Preparation failures also return an error and release the acquired lock. The
+background check detects immediate process exit; it is not an application
+readiness probe. If the CLI is killed after spawning, the child still publishes
+its PID before exec. A later start either sees the live PID and skips startup,
+or removes a stale PID and retries. The persistent guard file is never deleted.
 
 Startup exclusion uses a nonblocking OS file lock on the persistent
 `pids/.<service>.start.guard` file. The file must never be removed during normal

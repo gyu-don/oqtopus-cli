@@ -3,6 +3,7 @@
 mod components;
 mod lifecycle;
 mod operations;
+mod services;
 mod versions;
 
 pub(crate) use lifecycle::{backend_restart, backend_start, backend_stop};
@@ -14,6 +15,7 @@ use std::path::Path;
 
 use crate::environment::validate_environment;
 use crate::service::{ServiceStatus, running_pid};
+use services::BackendService;
 
 /// Validated metadata rendered by the `info` command.
 pub(crate) struct BackendInfo {
@@ -42,18 +44,6 @@ impl BackendDeviceStatus {
     }
 }
 
-/// Every backend service, in the order the Manager consumes. Startup and shutdown order are
-/// separate policies and are named where they differ.
-const SERVICES: [&str; 7] = [
-    "core",
-    "sse_engine",
-    "mitigator",
-    "estimator",
-    "combiner",
-    "tranqu",
-    "gateway",
-];
-
 /// Validates the current backend environment and returns its metadata.
 pub(crate) fn backend_info(args: &[String]) -> Result<BackendInfo, String> {
     if !args.is_empty() {
@@ -72,8 +62,9 @@ pub(crate) fn backend_status(args: &[String]) -> Result<BackendStatus, String> {
     }
 
     let environment = validate_environment("backend")?;
-    let services = SERVICES
+    let services = BackendService::STATUS_ORDER
         .into_iter()
+        .map(BackendService::name)
         .map(|name| ServiceStatus {
             name,
             pid: running_pid(&environment.root.join("pids").join(format!("{name}.pid"))),

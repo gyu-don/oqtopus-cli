@@ -2,11 +2,11 @@
 
 use crate::args::is_help;
 use crate::operations::find_component;
-use crate::versions::{OptionalEnvironment, VersionsKind, VersionsResult, list_versions, usage};
+use crate::versions::{OptionalEnvironment, VersionsKind, VersionsOutcome, list_versions, usage};
 
 use super::components::COMPONENTS;
 
-pub(crate) fn cloud_local_versions(args: &[String]) -> Result<VersionsResult, String> {
+pub(crate) fn cloud_local_versions(args: &[String]) -> Result<VersionsOutcome, String> {
     if is_help(args) {
         return Ok(usage(VersionsKind::CloudLocal, 0));
     }
