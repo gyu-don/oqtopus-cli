@@ -12,7 +12,6 @@ mod cloud_local;
 mod completion;
 mod environment;
 mod init;
-mod legacy;
 mod lifecycle;
 mod manager;
 mod metadata;

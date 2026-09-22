@@ -17,12 +17,19 @@ also defines the completion criteria for the pre-review architecture cleanup.
 
 ## Migration architecture
 
-The Rust executable owns a small, explicit routing decision:
+> **Status:** the port is complete. Every route is native, the fallback has
+> been retired per [Fallback retirement](#fallback-retirement), and
+> `bin/oqtopus` no longer exists. The rules below describe the routing
+> discipline that produced that result and remain the reference for how the
+> route inventory was built and reviewed.
+
+While the port was in progress, the Rust executable owned a small, explicit
+routing decision:
 
 1. A migrated command is dispatched to its native Rust implementation.
 2. Every other invocation is passed to the legacy Bash CLI.
 
-Initially every invocation goes to Bash. The native surface then grows one
+Initially every invocation went to Bash. The native surface then grew one
 command or coherent subcommand area at a time.
 
 Fallback must be selected before strict Rust-side parsing. Arguments belonging
@@ -185,11 +192,13 @@ Snapshot expectations must be produced from the Bash implementation before the
 corresponding Rust implementation is written. Snapshot changes are reviewed;
 they are never accepted mechanically.
 
-Characterization tests run the Rust executable by default and compare its
-output with the saved snapshots. While establishing snapshots before a port,
-`make record-characterization` explicitly substitutes the Bash implementation
-as the test subject. Normal test runs must not consult Bash for the expected
-output.
+Characterization tests run the Rust executable and compare its output with
+the saved snapshots. While the port was in progress, `make
+record-characterization` substituted the Bash implementation as the test
+subject to establish snapshots before each slice. That target, `bin/oqtopus`,
+and every other Bash-invoking test path were removed with the fallback; the
+existing snapshots remain the frozen record of the Bash contract they were
+recorded from.
 
 Environment-dependent characterization tests create `.metadata` and the
 required directory structure in a fresh temporary directory. They do not use a
@@ -323,10 +332,11 @@ file cannot overwrite a file outside the target.
 
 ## Completion during the hybrid period
 
-Shell completion must describe both migrated and legacy commands throughout
-the hybrid period. It may initially remain a Bash route. Any later change in
-its authoritative command model must be explicit and tested as part of the
-slice that changes it.
+Shell completion had to describe both migrated and legacy commands throughout
+the hybrid period, so it initially remained a Bash route. It has since moved
+to a Rust-owned command model (`src/completion.rs`): the bash/zsh/fish scripts
+are reproduced byte-for-byte from the retired Bash source, verified by
+characterization snapshots recorded before `bin/oqtopus` was removed.
 
 ## Delivery sequence
 
@@ -400,13 +410,13 @@ never lacks an installable CLI.
 
 ## Open migration decisions
 
-- When completion moves from Bash to a Rust-owned command model.
-- How the native executable is packaged, installed, and rolled back after
-  fallback retirement and before the merge into `main`. Packaging must keep an `oqtopus` executable on `PATH`,
-  because the Manager resolves it by name. Development keeps the current
-  manifest-relative fallback lookup during migration. If hybrid distribution
-  is introduced earlier, that change must settle how the legacy script is
-  packaged and located.
+- How the native executable is packaged, installed, and rolled back now that
+  the fallback is retired and before the merge into `main`. Packaging must
+  keep an `oqtopus` executable on `PATH`, because the Manager resolves it by
+  name. `scripts/install.sh` still fetches the Bash-era source archive and
+  extracts `bin/oqtopus` from it, which no longer exists; it must be rewritten
+  against the platform release binaries `release.yml` now builds and
+  publishes.
 - When structured (`--json`) output is introduced, and whether the
   human-readable output is frozen, kept as-is, or allowed to change at that
   point.

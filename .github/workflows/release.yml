@@ -123,23 +123,16 @@ jobs:
           chmod +x oqtopus
 
       - name: Run the migrated commands
-        env:
-          # Any route that still hands off to the Bash CLI exits 125 instead of running it.
-          OQTOPUS_FORBID_LEGACY_FALLBACK: "1"
         run: |
           set -x
           dist/oqtopus --help
           dist/oqtopus --version
           dist/oqtopus version
 
-          # `backend info` fails without an installed environment; it must fail on its own terms
-          # rather than by reaching for the legacy CLI.
-          set +e
-          dist/oqtopus backend info
-          status=$?
-          set -e
-          if [ "$status" -eq 125 ]; then
-            echo "backend info fell through to the legacy CLI" >&2
+          # `backend info` fails without an installed environment; confirm the standalone binary
+          # reports that on its own rather than crashing or hanging.
+          if dist/oqtopus backend info; then
+            echo "backend info unexpectedly succeeded without an environment" >&2
             exit 1
           fi
 

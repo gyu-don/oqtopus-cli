@@ -7,6 +7,7 @@ mod lifecycle;
 mod manager;
 mod operations;
 mod process_recovery;
+mod routing;
 
 use harness::TestContext;
 

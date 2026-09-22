@@ -1,6 +1,4 @@
-use std::env;
 use std::fs;
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 
 use crate::harness::{EnvironmentTemplate, TestContext};
 
@@ -336,11 +334,6 @@ fn restart_starts_absent_process_services_without_fallback() {
 
 #[test]
 fn cloud_local_database_start_runs_setup_sequence() {
-    let bash_subject = env::var("OQTOPUS_CHARACTERIZATION_SOURCE").as_deref() == Ok("bash");
-    let listener = bash_subject.then(|| {
-        TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3306))
-            .expect("reserve the cloud-local database port")
-    });
     let context = TestContext::new();
     context.create_environment(
         EnvironmentTemplate::CloudLocal,
@@ -357,16 +350,11 @@ fn cloud_local_database_start_runs_setup_sequence() {
     );
     context.write_executable("uv", b"#!/bin/sh\nset -eu\nprintf 'uv %s\\n' \"$*\"\n");
 
-    let output = if bash_subject {
-        context.run_snapshot_subject(["cloud-local", "start", "db"])
-    } else {
-        context
-            .rust_command(["cloud-local", "start", "db"])
-            .env("OQTOPUS_TEST_DB_PORT_READY", "1")
-            .output()
-            .expect("start cloud-local database")
-    };
-    drop(listener);
+    let output = context
+        .rust_command(["cloud-local", "start", "db"])
+        .env("OQTOPUS_TEST_DB_PORT_READY", "1")
+        .output()
+        .expect("start cloud-local database");
 
     assert!(
         output.status.success(),

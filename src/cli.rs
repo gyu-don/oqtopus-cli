@@ -14,7 +14,6 @@ use crate::cloud_local::{
 };
 use crate::completion::completion;
 use crate::init::init;
-use crate::legacy::run_legacy;
 use crate::manager::{
     manager_info, manager_install, manager_restart, manager_start, manager_status, manager_stop,
     manager_uninstall, manager_update, manager_versions,
@@ -27,13 +26,15 @@ const EXIT_FAILURE: i32 = 1;
 
 /// Implementation selected for a command-line invocation.
 ///
-/// Routing is intentionally coarse while the Rust migration is in progress: anything not listed
-/// here remains the legacy CLI's responsibility.
+/// Every route is native; there is no remaining fallback to a legacy implementation.
 pub(crate) enum Route {
     Help,
     Version,
     Init,
     Completion,
+    UnknownCommand,
+    BackendHelp,
+    BackendUnknown,
     BackendInfo,
     BackendStatus,
     BackendDeviceStatus,
@@ -45,6 +46,8 @@ pub(crate) enum Route {
     BackendStart,
     BackendStop,
     BackendRestart,
+    CloudLocalHelp,
+    CloudLocalUnknown,
     CloudLocalInfo,
     CloudLocalStatus,
     CloudLocalVersions,
@@ -54,6 +57,8 @@ pub(crate) enum Route {
     CloudLocalStart,
     CloudLocalStop,
     CloudLocalRestart,
+    ManagerHelp,
+    ManagerUnknown,
     ManagerInfo,
     ManagerStatus,
     ManagerVersions,
@@ -63,50 +68,61 @@ pub(crate) enum Route {
     ManagerStart,
     ManagerStop,
     ManagerRestart,
-    Legacy,
 }
 
-/// Selects the Rust implementation for migrated commands and [`Route::Legacy`] otherwise.
+/// Selects the Rust implementation for a command-line invocation.
 pub(crate) fn route(args: &[String]) -> Route {
     // Only the two leading words select a route; the rest belongs to the command itself.
     let command = args.first().map(String::as_str);
     let action = args.get(1).map(String::as_str);
 
-    match (command, action) {
-        (None, _) | (Some("help" | "--help"), _) => Route::Help,
-        (Some("version" | "--version"), _) => Route::Version,
-        (Some("init"), _) => Route::Init,
-        (Some("completion"), _) => Route::Completion,
-        (Some("backend"), Some("info")) => Route::BackendInfo,
-        (Some("backend"), Some("status")) => Route::BackendStatus,
-        (Some("backend"), Some("device-status")) => Route::BackendDeviceStatus,
-        (Some("backend"), Some("versions")) => Route::BackendVersions,
-        (Some("backend"), Some("install")) => Route::BackendInstall,
-        (Some("backend"), Some("build")) => Route::BackendBuild,
-        (Some("backend"), Some("uninstall")) => Route::BackendUninstall,
-        (Some("backend"), Some("update")) => Route::BackendUpdate,
-        (Some("backend"), Some("start")) => Route::BackendStart,
-        (Some("backend"), Some("stop")) => Route::BackendStop,
-        (Some("backend"), Some("restart")) => Route::BackendRestart,
-        (Some("cloud-local"), Some("info")) => Route::CloudLocalInfo,
-        (Some("cloud-local"), Some("status")) => Route::CloudLocalStatus,
-        (Some("cloud-local"), Some("versions")) => Route::CloudLocalVersions,
-        (Some("cloud-local"), Some("install")) => Route::CloudLocalInstall,
-        (Some("cloud-local"), Some("uninstall")) => Route::CloudLocalUninstall,
-        (Some("cloud-local"), Some("update")) => Route::CloudLocalUpdate,
-        (Some("cloud-local"), Some("start")) => Route::CloudLocalStart,
-        (Some("cloud-local"), Some("stop")) => Route::CloudLocalStop,
-        (Some("cloud-local"), Some("restart")) => Route::CloudLocalRestart,
-        (Some("manager"), Some("info")) => Route::ManagerInfo,
-        (Some("manager"), Some("status")) => Route::ManagerStatus,
-        (Some("manager"), Some("versions")) => Route::ManagerVersions,
-        (Some("manager"), Some("install")) => Route::ManagerInstall,
-        (Some("manager"), Some("uninstall")) => Route::ManagerUninstall,
-        (Some("manager"), Some("update")) => Route::ManagerUpdate,
-        (Some("manager"), Some("start")) => Route::ManagerStart,
-        (Some("manager"), Some("stop")) => Route::ManagerStop,
-        (Some("manager"), Some("restart")) => Route::ManagerRestart,
-        _ => Route::Legacy,
+    match command {
+        None | Some("help" | "--help") => Route::Help,
+        Some("version" | "--version") => Route::Version,
+        Some("init") => Route::Init,
+        Some("completion") => Route::Completion,
+        Some("backend") => match action {
+            None | Some("help" | "--help") => Route::BackendHelp,
+            Some("info") => Route::BackendInfo,
+            Some("status") => Route::BackendStatus,
+            Some("device-status") => Route::BackendDeviceStatus,
+            Some("versions") => Route::BackendVersions,
+            Some("install") => Route::BackendInstall,
+            Some("build") => Route::BackendBuild,
+            Some("uninstall") => Route::BackendUninstall,
+            Some("update") => Route::BackendUpdate,
+            Some("start") => Route::BackendStart,
+            Some("stop") => Route::BackendStop,
+            Some("restart") => Route::BackendRestart,
+            Some(_) => Route::BackendUnknown,
+        },
+        Some("cloud-local") => match action {
+            None | Some("help" | "--help") => Route::CloudLocalHelp,
+            Some("info") => Route::CloudLocalInfo,
+            Some("status") => Route::CloudLocalStatus,
+            Some("versions") => Route::CloudLocalVersions,
+            Some("install") => Route::CloudLocalInstall,
+            Some("uninstall") => Route::CloudLocalUninstall,
+            Some("update") => Route::CloudLocalUpdate,
+            Some("start") => Route::CloudLocalStart,
+            Some("stop") => Route::CloudLocalStop,
+            Some("restart") => Route::CloudLocalRestart,
+            Some(_) => Route::CloudLocalUnknown,
+        },
+        Some("manager") => match action {
+            None | Some("help" | "--help") => Route::ManagerHelp,
+            Some("info") => Route::ManagerInfo,
+            Some("status") => Route::ManagerStatus,
+            Some("versions") => Route::ManagerVersions,
+            Some("install") => Route::ManagerInstall,
+            Some("uninstall") => Route::ManagerUninstall,
+            Some("update") => Route::ManagerUpdate,
+            Some("start") => Route::ManagerStart,
+            Some("stop") => Route::ManagerStop,
+            Some("restart") => Route::ManagerRestart,
+            Some(_) => Route::ManagerUnknown,
+        },
+        Some(_) => Route::UnknownCommand,
     }
 }
 
@@ -140,6 +156,11 @@ pub(crate) fn run(args: &[String]) -> i32 {
                 .map(|()| result.exit_code())
                 .map_err(|error| format!("failed to write completion result: {error}"))
         }),
+        Route::UnknownCommand => Err(format!("unknown command: {}", args[0])),
+        Route::BackendHelp => text::write_backend_help(&mut io::stdout().lock())
+            .map(|()| EXIT_SUCCESS)
+            .map_err(|error| format!("failed to write backend help: {error}")),
+        Route::BackendUnknown => Err(format!("unknown backend command: {}", args[1])),
         Route::BackendInfo => backend_info(command_args).and_then(|info| {
             text::write_backend_info(&mut io::stdout().lock(), &info)
                 .map(|()| EXIT_SUCCESS)
@@ -181,6 +202,10 @@ pub(crate) fn run(args: &[String]) -> i32 {
         Route::BackendRestart => {
             lifecycle_stdout(|out, err| backend_restart(command_args, out, err))
         }
+        Route::CloudLocalHelp => text::write_cloud_local_help(&mut io::stdout().lock())
+            .map(|()| EXIT_SUCCESS)
+            .map_err(|error| format!("failed to write cloud-local help: {error}")),
+        Route::CloudLocalUnknown => Err(format!("unknown cloud-local command: {}", args[1])),
         Route::CloudLocalInfo => cloud_local_info(command_args).and_then(|info| {
             text::write_cloud_local_info(&mut io::stdout().lock(), &info)
                 .map(|()| EXIT_SUCCESS)
@@ -217,6 +242,10 @@ pub(crate) fn run(args: &[String]) -> i32 {
         Route::CloudLocalRestart => {
             lifecycle_stdout(|out, err| cloud_local_restart(command_args, out, err))
         }
+        Route::ManagerHelp => text::write_manager_help(&mut io::stdout().lock())
+            .map(|()| EXIT_SUCCESS)
+            .map_err(|error| format!("failed to write manager help: {error}")),
+        Route::ManagerUnknown => Err(format!("unknown manager command: {}", args[1])),
         Route::ManagerInfo => manager_info(command_args).and_then(|info| {
             text::write_manager_info(&mut io::stdout().lock(), &info)
                 .map(|()| EXIT_SUCCESS)
@@ -247,7 +276,6 @@ pub(crate) fn run(args: &[String]) -> i32 {
         Route::ManagerStart => lifecycle_stdout(|out, _err| manager_start(command_args, out)),
         Route::ManagerStop => lifecycle_stdout(|out, _err| manager_stop(command_args, out)),
         Route::ManagerRestart => lifecycle_stdout(|out, _err| manager_restart(command_args, out)),
-        Route::Legacy => run_legacy(args),
     };
 
     match outcome {

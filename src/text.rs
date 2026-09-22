@@ -51,6 +51,74 @@ pub(crate) fn write_help(out: &mut impl Write) -> io::Result<()> {
     out.flush()
 }
 
+const BACKEND_HELP: &str = "\
+Usage:
+  oqtopus backend <command> [args]
+
+Commands:
+  install         Install backend component releases.
+  build           Build backend runtime artifacts.
+  versions        List available component versions.
+  uninstall       Remove an installed release.
+  update          Install the latest release of a component.
+  start           Start a managed service.
+  stop            Stop a managed service.
+  restart         Restart a managed service.
+  status          Show process status.
+  device-status   Show or update gateway device status.
+  info            Show backend environment information.
+  help            Show help.
+";
+
+const CLOUD_LOCAL_HELP: &str = "\
+Usage:
+  oqtopus cloud-local <command> [args]
+
+Commands:
+  install         Install cloud-local component releases.
+  versions        List available component versions.
+  uninstall       Remove an installed release.
+  update          Install the latest release of a component.
+  start           Start a managed service.
+  stop            Stop a managed service.
+  restart         Restart a managed service.
+  status          Show process status.
+  info            Show environment metadata.
+  help            Show this help.
+";
+
+const MANAGER_HELP: &str = "\
+Usage:
+  oqtopus manager <command> [args]
+
+Commands:
+  install    Install a manager release.
+  uninstall  Remove an installed release.
+  update     Install the latest release and update the environment binding.
+  versions   List available manager versions.
+  start      Start the manager service.
+  stop       Stop the manager service.
+  restart    Restart the manager service.
+  status     Show process status.
+  info       Show manager environment information.
+  help       Show this help.
+";
+
+pub(crate) fn write_backend_help(out: &mut impl Write) -> io::Result<()> {
+    out.write_all(BACKEND_HELP.as_bytes())?;
+    out.flush()
+}
+
+pub(crate) fn write_cloud_local_help(out: &mut impl Write) -> io::Result<()> {
+    out.write_all(CLOUD_LOCAL_HELP.as_bytes())?;
+    out.flush()
+}
+
+pub(crate) fn write_manager_help(out: &mut impl Write) -> io::Result<()> {
+    out.write_all(MANAGER_HELP.as_bytes())?;
+    out.flush()
+}
+
 pub(crate) fn write_version(out: &mut impl Write, info: &VersionInfo) -> io::Result<()> {
     writeln!(out, "oqtopus {}", info.version)?;
     out.flush()
