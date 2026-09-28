@@ -106,7 +106,7 @@ branch based on the commit message prefix (see [Conventional Commits](#conventio
 
 The executable embeds `[package].version` from `Cargo.toml`. The release workflow
 checks that the Git tag equals `v` followed by this version; it does not inject a
-version or modify the manifest. `0.0.0` is a development placeholder.
+version or modify the manifest.
 
 1. Before each release, manually bump `[package].version` in `Cargo.toml` to the
    intended version (for example, `1.2.3`).
@@ -119,6 +119,10 @@ version or modify the manifest. `0.0.0` is a development placeholder.
    the platform binaries, then publishes their archives and checksums.
 5. Verify that the published binary reports the intended version with
    `oqtopus version`.
+
+A tag containing a hyphen (for example, `v2.0.0-beta.1`) is published as a
+GitHub prerelease. `scripts/install.sh` only picks plain `vX.Y.Z` tags as the
+default version, so a prerelease is installed only when requested explicitly.
 
 A workflow dispatch can rehearse the build and smoke tests from a branch;
 publishing remains restricted to tags.
