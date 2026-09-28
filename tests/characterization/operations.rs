@@ -164,8 +164,18 @@ fn backend_build_streams_docker_output_in_order() {
     context.install_fake_docker();
 
     let output = context.run_snapshot_subject(["backend", "build", "sse-runtime"]);
-    let normalized = context
-        .normalize(&context.render_output(&output))
+    // The image must run as the invoking user. The IDs vary by host (and in digit count, e.g.
+    // 1001 on Linux runners and 501/20 on macOS), so pin them here and name them in the snapshot.
+    // SAFETY: these ID getters have no arguments or memory-safety preconditions.
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    let rendered = context.normalize(&context.render_output(&output));
+    let uid_arg = format!("--build-arg UID={uid} ");
+    let gid_arg = format!("--build-arg GID={gid}\n");
+    assert!(rendered.contains(&uid_arg), "{rendered}");
+    assert!(rendered.contains(&gid_arg), "{rendered}");
+    let normalized = rendered
+        .replace(&uid_arg, "--build-arg UID=<UID> ")
+        .replace(&gid_arg, "--build-arg GID=<GID>\n")
         .replace(|character: char| character.is_ascii_digit(), "<N>");
     insta::assert_snapshot!(normalized);
 }
