@@ -36,6 +36,27 @@ The current directory must match the `environment_root` recorded in `.metadata`.
 This can happen if the environment directory was moved after creation. Create a
 new environment or move the directory back to its recorded path.
 
+## Downloads Fail Behind A Proxy Or Private CA
+
+`init`, `install`, `update`, and `versions` download from GitHub over HTTPS.
+
+Certificates are verified against the operating system's trust store, so a
+private or TLS-inspection CA installed system-wide is trusted. On Linux, the
+`SSL_CERT_FILE` and `SSL_CERT_DIR` variables select a different CA bundle or
+directory.
+
+Proxies are read from the same variables curl uses for HTTPS, in this order:
+`https_proxy`, `HTTPS_PROXY`, `all_proxy`, `ALL_PROXY`. `http_proxy` is not used.
+`http://`, `https://`, `socks4://`, `socks4a://`, `socks5://`, and `socks5h://`
+proxies are supported. `no_proxy` (or `NO_PROXY`) takes a comma-separated list of
+host names; an entry such as `github.com` also matches its subdomains, and `*`
+disables the proxy. IP ranges in CIDR notation are not supported.
+
+```bash
+export https_proxy=http://proxy.example.com:3128
+oqtopus backend versions
+```
+
 ## Docker Is Required For Engine Install
 
 Installing `engine` builds the `sse_runtime` Docker image.

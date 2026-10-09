@@ -10,7 +10,8 @@ flate2 = "1"
 libc = "0.2"
 tar = "0.4"
 tempfile = "3"
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+# Trust the OS certificate store and support SOCKS proxies, as curl did.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "socks-proxy"] }
 
 [features]
 # Compiles the `OQTOPUS_TEST_*` fixture overrides the characterization suite needs.
