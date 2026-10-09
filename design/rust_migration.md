@@ -299,8 +299,10 @@ are specified separately in the runtime architecture document.
   side effect.
 - Rust service startup uses an OS lock on a persistent
   `pids/.<service>.start.guard` file. The old start-lock directory is retained
-  for diagnostics and legacy recovery, but Rust mutual exclusion does not rely
-  on `Drop` running. Children publish their PID before executing the service so
+  only for diagnostics: a leftover directory is reused without checking its
+  PID, so Rust mutual exclusion does not rely on `Drop` running. The Bash CLI
+  relied on the directory alone, so a Rust and a Bash caller no longer exclude
+  each other. Children publish their PID before executing the service so
   killing the caller cannot leave an executing service without its PID record.
 - Release uninstall continues to remove only the shared release directory and
   leaves the environment binding in metadata. Branch uninstall removes the

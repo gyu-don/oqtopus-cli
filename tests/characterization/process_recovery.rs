@@ -135,23 +135,30 @@ fn pid_file_creation_failure_does_not_launch_uv_and_allows_retry() {
 }
 
 #[test]
-fn stale_legacy_start_locks_do_not_prevent_startup() {
-    for stale_pid in [None, Some("2147483647\n")] {
+fn leftover_start_lock_directories_do_not_prevent_startup() {
+    // The directory records the owner for diagnostics only. Without the guard lock held, even a
+    // live PID in it is stale: it may have been reused by an unrelated process, such as this test.
+    let live_unrelated_pid = format!("{}\n", std::process::id());
+    for stale_pid in [
+        None,
+        Some("2147483647\n"),
+        Some(live_unrelated_pid.as_str()),
+    ] {
         let context = manager_context();
         let trace = context.root().join("uv-invocations");
         let mut service_cleanup = ServiceCleanup::new(&context, &trace);
         install_long_running_uv(&context);
         let legacy_lock = context.work_dir().join("pids/.manager.start.lock");
-        fs::create_dir_all(&legacy_lock).expect("create stale legacy start lock");
+        fs::create_dir_all(&legacy_lock).expect("create leftover start lock");
         if let Some(pid) = stale_pid {
-            fs::write(legacy_lock.join("pid"), pid).expect("write stale legacy lock PID");
+            fs::write(legacy_lock.join("pid"), pid).expect("write leftover lock PID");
         }
 
         let mut start = spawn_start(&context, &trace, None);
         let status = start.wait_for_exit(PROCESS_TIMEOUT);
         assert!(
             status.success(),
-            "start with stale legacy lock failed: {status}"
+            "start with leftover lock {stale_pid:?} failed: {status}"
         );
         assert_eq!(invocation_count(&trace), 1);
 

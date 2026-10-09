@@ -259,9 +259,10 @@ cleanup: removing it could allow two callers to lock different inodes. Because
 it outlives every start, an existing guard is opened read-only, which needs no
 write access to lock: a guard created by one user must not permanently lock out
 another. The OS releases the lock when its last owning descriptor closes,
-including after SIGKILL. The old `.<service>.start.lock` directory and owner PID remain for
-diagnostics and legacy lock recovery; their cleanup is not the source of mutual
-exclusion between Rust callers.
+including after SIGKILL. The `.<service>.start.lock` directory and owner PID remain only so
+a refused contender can name the owner. Once the guard is locked, a leftover
+directory is reused without inspecting its PID, which may have been reused by an
+unrelated process.
 
 The lock covers stale PID cleanup, command preparation, spawn, PID publication,
 and the immediate-exit check. A foreground service releases the startup lock

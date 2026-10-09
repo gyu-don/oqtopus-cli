@@ -76,7 +76,8 @@ pub(crate) enum StopStyle {
 /// Serializes startup using a kernel lock that is released even after SIGKILL.
 ///
 /// The guard file is permanent: unlinking it would allow contenders to lock different inodes.
-/// The directory and its PID are retained only for diagnostics and older CLI compatibility.
+/// The directory and its PID only tell a contender which process holds the lock; they never
+/// decide who gets it.
 struct StartLock {
     directory: PathBuf,
     _guard: fs::File,
@@ -105,37 +106,15 @@ impl StartLock {
             return Err(format!("cannot acquire service start lock: {error}"));
         }
 
-        match fs::create_dir(&directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                let lock_pid = running_pid(&directory.join("pid"));
-                if let Some(pid) = lock_pid {
-                    return Err(format!(
-                        "cannot start '{service}'. Another start operation is already in progress (PID {pid})."
-                    ));
-                }
-                let _ = fs::remove_file(directory.join("pid"));
-                fs::remove_dir(&directory).map_err(|_| {
-                    format!(
-                        "cannot start '{service}'. Could not acquire start lock: {}",
-                        directory.display()
-                    )
-                })?;
-                fs::create_dir(&directory).map_err(|_| {
-                    format!(
-                        "cannot start '{service}'. Could not acquire start lock: {}",
-                        directory.display()
-                    )
-                })?;
-            }
-            Err(_) => {
-                return Err(format!(
-                    "cannot start '{service}'. Could not acquire start lock: {}",
-                    directory.display()
-                ));
-            }
-        }
-
+        // The flock alone excludes other callers, so any directory already here was left by a
+        // caller that died without cleanup, or by the Bash CLI. Its PID is stale even when it
+        // names a live process: the number may have been reused.
+        fs::create_dir_all(&directory).map_err(|_| {
+            format!(
+                "cannot start '{service}'. Could not acquire start lock: {}",
+                directory.display()
+            )
+        })?;
         if let Err(error) = fs::write(directory.join("pid"), format!("{}\n", std::process::id())) {
             let _ = fs::remove_dir(&directory);
             return Err(format!("cannot write service start lock: {error}"));
