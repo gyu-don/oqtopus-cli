@@ -12,10 +12,10 @@ install: ## Install dependencies and configure git hooks and commit template
 	@chmod +x scripts/diff-backend-configs.sh
 
 test: ## Run Rust tests
-	@cargo test --locked
+	@cargo test --locked --features test-hooks
 
 test-characterization: ## Run characterization snapshots
-	@cargo test --locked --test characterization
+	@cargo test --locked --features test-hooks --test characterization
 
 diff-backend-configs: ## Compare backend template configs against upstream repositories
 	@scripts/diff-backend-configs.sh

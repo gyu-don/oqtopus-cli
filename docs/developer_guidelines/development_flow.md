@@ -111,7 +111,8 @@ version or modify the manifest.
 1. Before each release, manually bump `[package].version` in `Cargo.toml` to the
    intended version (for example, `1.2.3`).
 2. Run `cargo check` to update the package entry in `Cargo.lock`, then run
-   `cargo test --locked` and `cargo clippy --all-targets --locked`.
+   `cargo test --locked --features test-hooks` and
+   `cargo clippy --all-targets --locked --features test-hooks`.
 3. Include both `Cargo.toml` and `Cargo.lock` in the release preparation commit
    and merge the reviewed change into `main`.
 4. Create and push the matching tag (for example, `v1.2.3`) on that commit.

@@ -63,9 +63,9 @@ jobs:
       - name: Run tests
         run: |
           if [ -n "$TARGET" ]; then
-            cargo test --locked --target "$TARGET"
+            cargo test --locked --features test-hooks --target "$TARGET"
           else
-            cargo test --locked
+            cargo test --locked --features test-hooks
           fi
         env:
           TARGET: ${{ matrix.target }}

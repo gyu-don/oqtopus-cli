@@ -7,9 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::archive::{extract_github_archive, validate_directory_symlinks};
 use crate::remote::fetch_url;
+use crate::test_hooks;
 
 const DEFAULT_TEMPLATE_BRANCH: &str = "main";
-const TEST_MODE: &str = "OQTOPUS_TEST_MODE";
 
 #[derive(Clone, Copy)]
 pub(crate) enum EnvironmentTemplate {
@@ -285,11 +285,8 @@ fn install_root(template: EnvironmentTemplate) -> Result<PathBuf, String> {
 /// Returns the creation timestamp stamped into a new environment's metadata.
 ///
 /// Snapshots would otherwise differ on every run, so characterization tests pin the value.
-/// The override is available only when the explicit test mode is enabled.
 fn created_at() -> Result<String, String> {
-    if env::var_os(TEST_MODE).is_some()
-        && let Ok(value) = env::var("OQTOPUS_TEST_CREATED_AT")
-    {
+    if let Some(value) = test_hooks::var("OQTOPUS_TEST_CREATED_AT") {
         return Ok(value);
     }
 

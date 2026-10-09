@@ -1,3 +1,7 @@
+// The suite replaces network access and the clock through hooks that exist only in this build.
+#[cfg(not(feature = "test-hooks"))]
+compile_error!("the characterization suite needs `--features test-hooks`; use `make test`");
+
 mod backend;
 mod cloud_local;
 mod completion;

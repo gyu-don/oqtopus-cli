@@ -16,6 +16,7 @@ use crate::service::{
     BackgroundOutput, ServiceCommand, StopStyle, ensure_command, load_env_exports, start_process,
     stop_process,
 };
+use crate::test_hooks;
 use crate::text::write_error;
 
 use super::{DATABASE, SERVICES};
@@ -269,8 +270,7 @@ fn start_database<W: Write, E: Write>(
     // The characterization suite cannot open loopback sockets in every sandbox. As with the
     // HTTP fixture hooks, this explicit test hook bypasses only the wait; subsequent setup still
     // executes through the same commands and paths as production.
-    let mut reachable = env::var_os("OQTOPUS_TEST_MODE").is_some()
-        && env::var_os("OQTOPUS_TEST_DB_PORT_READY").is_some();
+    let mut reachable = test_hooks::var_os("OQTOPUS_TEST_DB_PORT_READY").is_some();
     if !reachable {
         for attempt in 0..30 {
             if TcpStream::connect_timeout(&address.into(), Duration::from_millis(200)).is_ok() {

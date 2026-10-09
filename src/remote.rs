@@ -1,11 +1,11 @@
 //! Git smart-HTTP ref discovery shared by commands that read remote repositories.
 
-use std::env;
 use std::fs;
 use std::io::Read;
 
+use crate::test_hooks;
+
 const GITHUB_BASE_URL: &str = "https://github.com";
-const TEST_MODE: &str = "OQTOPUS_TEST_MODE";
 
 pub(crate) fn remote_refs_url(repository: &str) -> String {
     format!("{GITHUB_BASE_URL}/{repository}.git/info/refs?service=git-upload-pack")
@@ -36,16 +36,11 @@ pub(crate) fn resolve_branch_commit(repository: &str, branch: &str) -> Result<St
 }
 
 pub(crate) fn fetch_url(url: &str) -> Result<Vec<u8>, ()> {
-    // The fixture hook is gated by the explicit test mode used by characterization tests;
-    // production invocations use the real HTTP transport.
-    //
-    // Two hooks exist because commands differ in how many requests they make. The manifest maps
+    // Two test hooks exist because commands differ in how many requests they make. The manifest maps
     // several URLs to several responses, for commands that resolve a ref and then download an
     // archive. The single-response hook answers every request with the same bytes, optionally
     // asserting the URL, which is what a one-request command needs.
-    if env::var_os(TEST_MODE).is_some()
-        && let Some(path) = env::var_os("OQTOPUS_TEST_HTTP_FIXTURE_MANIFEST")
-    {
+    if let Some(path) = test_hooks::var_os("OQTOPUS_TEST_HTTP_FIXTURE_MANIFEST") {
         let manifest = fs::read_to_string(path).map_err(|_| ())?;
         let fixture = manifest.lines().find_map(|line| {
             let (candidate, fixture) = line.split_once('\t')?;
@@ -53,10 +48,8 @@ pub(crate) fn fetch_url(url: &str) -> Result<Vec<u8>, ()> {
         });
         return fs::read(fixture.ok_or(())?).map_err(|_| ());
     }
-    if env::var_os(TEST_MODE).is_some()
-        && let Some(path) = env::var_os("OQTOPUS_TEST_HTTP_RESPONSE_FILE")
-    {
-        if let Ok(expected) = env::var("OQTOPUS_TEST_EXPECTED_HTTP_URL")
+    if let Some(path) = test_hooks::var_os("OQTOPUS_TEST_HTTP_RESPONSE_FILE") {
+        if let Some(expected) = test_hooks::var("OQTOPUS_TEST_EXPECTED_HTTP_URL")
             && expected != url
         {
             return Err(());

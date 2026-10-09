@@ -45,10 +45,10 @@ on design questions; this file wins on workflow.
 ## Commands
 
 ```bash
-cargo test --locked          # or: make test — full suite, always run before finishing
-cargo test --locked --test characterization
-cargo fmt                    # rustfmt defaults, no rustfmt.toml
-cargo clippy --all-targets   # currently warning-free; keep it that way
+cargo test --locked --features test-hooks   # or: make test — full suite, always run before finishing
+cargo test --locked --features test-hooks --test characterization
+cargo fmt                                    # rustfmt defaults, no rustfmt.toml
+cargo clippy --all-targets --features test-hooks   # currently warning-free; keep it that way
 make docs-lint               # pymarkdownlnt over docs/ only
 make docs-build              # MkDocs build
 make install                 # uv sync (docs tooling only) + git commit template
@@ -57,7 +57,10 @@ make install                 # uv sync (docs tooling only) + git commit template
 `make install` sets up **documentation** tooling (Python ≥ 3.13, uv ≥ 0.10). It is
 not needed to build or test the CLI; there is no Python or Bash runtime code.
 
-CI (`.github/workflows/rust-test.yml`) runs `cargo test --locked` on linux-gnu,
+The characterization suite refuses to compile without `--features test-hooks`;
+release builds never enable it.
+
+CI (`.github/workflows/rust-test.yml`) runs `cargo test --locked --features test-hooks` on linux-gnu,
 linux-musl, and macOS. Keep all three green: musl and macOS exist to catch libc,
 allocator, and portability divergence, so avoid platform-specific assumptions.
 
@@ -115,8 +118,8 @@ errors, and externally observable results.
   with focused assertions *in addition to* the snapshot, so they read as
   load-bearing.
 - **No network in tests.** Remote access is served from fixed fixtures via the
-  `OQTOPUS_TEST_*` hooks in `src/remote.rs`, `src/init.rs`, and
-  `src/cloud_local/lifecycle.rs`. Those hooks are inert unless
+  `OQTOPUS_TEST_*` hooks, read only through `src/test_hooks.rs`. They exist
+  only in builds with the `test-hooks` feature and are inert unless
   `OQTOPUS_TEST_MODE` is set. Live GitHub access is a manual check, not a CI requirement.
 - New characterization files need a `mod` line in `tests/characterization/main.rs`;
   `autotests = false`, so a new *test target* also needs a `[[test]]` entry in
