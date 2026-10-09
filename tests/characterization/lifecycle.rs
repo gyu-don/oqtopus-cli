@@ -151,18 +151,19 @@ fn process_services_start_and_stop_without_fallback() {
         let invocation = context.root().join("uv-invocation");
         context.write_executable(
             "uv",
-            b"#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" > \"$OQTOPUS_TEST_UV_INVOCATION\"\nprintf '%s|%s|%s\\n' \"${POWERTOOLS_METRICS_NAMESPACE:-}\" \"${POWERTOOLS_SERVICE_NAME:-}\" \"${FROM_DOTENV:-}\" >> \"$OQTOPUS_TEST_UV_INVOCATION\"\nexec sleep 60\n",
+            b"#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" > \"$OQTOPUS_TEST_UV_INVOCATION\"\nprintf '%s|%s|%s\\n' \"${POWERTOOLS_METRICS_NAMESPACE:-}\" \"${POWERTOOLS_SERVICE_NAME:-}\" \"${FROM_DOTENV:-}\" >> \"$OQTOPUS_TEST_UV_INVOCATION\"\nprintf '%s\\n' \"${VIRTUAL_ENV:-}\" >> \"$OQTOPUS_TEST_UV_INVOCATION\"\nexec sleep 60\n",
         );
         fs::create_dir_all(context.work_dir().join("config")).expect("create config fixture");
         fs::write(
             context.work_dir().join("config/.env"),
-            "FROM_DOTENV=loaded\n",
+            "FROM_DOTENV=loaded\nVIRTUAL_ENV=/from/dotenv\n",
         )
         .expect("write env fixture");
 
         let started = context
             .rust_command(start_args)
             .env("OQTOPUS_TEST_UV_INVOCATION", &invocation)
+            .env("VIRTUAL_ENV", "/from/caller")
             .output()
             .expect("start service");
         assert!(
@@ -177,12 +178,21 @@ fn process_services_start_and_stop_without_fallback() {
             .replace("<RELEASE>", &release_path.display().to_string())
             .replace("<WORK>", &context.work_dir().display().to_string());
         assert_eq!(actual.lines().next(), Some(expected.as_str()));
+        // The manager never received `config/.env`; the other services do.
+        let dotenv = if template == EnvironmentTemplate::Manager {
+            ""
+        } else {
+            "loaded"
+        };
         assert!(
             actual
                 .lines()
                 .nth(1)
-                .is_some_and(|line| line.ends_with("|loaded"))
+                .is_some_and(|line| line.ends_with(&format!("|{dotenv}"))),
+            "{actual}"
         );
+        // `uv` must pick the project environment, whichever source names another one.
+        assert_eq!(actual.lines().nth(2), Some(""), "{actual}");
         if template == EnvironmentTemplate::CloudLocal {
             let namespace = if start_args[2] == "worker" {
                 "pending-jobs-updater"

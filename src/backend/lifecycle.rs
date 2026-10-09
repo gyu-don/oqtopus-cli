@@ -175,7 +175,8 @@ fn backend_command(
             .join(format!("config/{service}/logging.yaml"))
             .display()
             .to_string(),
-    ]))
+    ])
+    .with_config_env())
 }
 
 fn stop_backend_service<W: Write>(

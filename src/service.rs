@@ -48,6 +48,8 @@ pub(crate) struct ServiceCommand {
     pub(crate) program: &'static str,
     pub(crate) args: Vec<String>,
     pub(crate) environment: Vec<(&'static str, &'static str)>,
+    /// Whether the child receives the exports of the environment's `config/.env`.
+    pub(crate) config_env: bool,
 }
 
 impl ServiceCommand {
@@ -56,7 +58,13 @@ impl ServiceCommand {
             program: "uv",
             args,
             environment: Vec::new(),
+            config_env: false,
         }
+    }
+
+    pub(crate) fn with_config_env(mut self) -> Self {
+        self.config_env = true;
+        self
     }
 }
 
@@ -180,11 +188,13 @@ where
     ensure_command("uv")?;
     let command = make_command()?;
     let mut child_command = Command::new(command.program);
-    child_command
-        .args(&command.args)
-        .current_dir(root)
-        .env_remove("VIRTUAL_ENV")
-        .envs(load_env_exports(&root.join("config/.env")));
+    child_command.args(&command.args).current_dir(root);
+    if command.config_env {
+        child_command.envs(load_env_exports(&root.join("config/.env")));
+    }
+    // Removed after `.env` is applied: services must run in the project environment `uv`
+    // selects, even when `.env` names another one.
+    child_command.env_remove("VIRTUAL_ENV");
     for (key, value) in command.environment {
         child_command.env(key, value);
     }

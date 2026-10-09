@@ -144,7 +144,8 @@ fn cloud_command(environment: &NamedEnvironment, service: &str) -> Result<Servic
                     .join("backend/oqtopus_cloud/worker/pending_jobs_updater/local_scheduler.py")
                     .display()
                     .to_string(),
-            ]);
+            ])
+            .with_config_env();
             command.environment = vec![
                 ("POWERTOOLS_METRICS_NAMESPACE", "pending-jobs-updater"),
                 ("POWERTOOLS_SERVICE_NAME", "pending-jobs-updater"),
@@ -192,7 +193,8 @@ fn cloud_command(environment: &NamedEnvironment, service: &str) -> Result<Servic
                 "--reload".into(),
                 "--log-level".into(),
                 "debug".into(),
-            ]);
+            ])
+            .with_config_env();
             command.environment = vec![
                 ("POWERTOOLS_METRICS_NAMESPACE", namespace),
                 ("POWERTOOLS_SERVICE_NAME", namespace),
