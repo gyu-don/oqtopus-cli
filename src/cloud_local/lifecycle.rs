@@ -16,7 +16,6 @@ use crate::service::{
     BackgroundOutput, ServiceCommand, StopStyle, ensure_command, load_env_exports, start_process,
     stop_process,
 };
-use crate::test_hooks;
 use crate::text::write_error;
 
 use super::{DATABASE, SERVICES};
@@ -207,6 +206,26 @@ fn cloud_command(environment: &NamedEnvironment, service: &str) -> Result<Servic
     Ok(command)
 }
 
+/// Waits up to about 30 seconds for `address` to accept a TCP connection.
+fn wait_for_port(address: SocketAddrV4) -> bool {
+    // The characterization suite cannot open loopback sockets in every sandbox. As with the
+    // HTTP fixture hooks, this explicit test hook bypasses only the wait; subsequent setup still
+    // executes through the same commands and paths as production.
+    #[cfg(feature = "test-hooks")]
+    if crate::test_hooks::db_port_ready() {
+        return true;
+    }
+    for attempt in 0..30 {
+        if TcpStream::connect_timeout(&address.into(), Duration::from_millis(200)).is_ok() {
+            return true;
+        }
+        if attempt < 29 {
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
+    false
+}
+
 fn start_database<W: Write, E: Write>(
     environment: &NamedEnvironment,
     out: &mut W,
@@ -266,23 +285,7 @@ fn start_database<W: Write, E: Write>(
         return Err("timed out waiting for db to become ready.".into());
     }
     line(out, "Waiting for db port to be reachable from the host")?;
-    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3306);
-    // The characterization suite cannot open loopback sockets in every sandbox. As with the
-    // HTTP fixture hooks, this explicit test hook bypasses only the wait; subsequent setup still
-    // executes through the same commands and paths as production.
-    let mut reachable = test_hooks::var_os("OQTOPUS_TEST_DB_PORT_READY").is_some();
-    if !reachable {
-        for attempt in 0..30 {
-            if TcpStream::connect_timeout(&address.into(), Duration::from_millis(200)).is_ok() {
-                reachable = true;
-                break;
-            }
-            if attempt < 29 {
-                thread::sleep(Duration::from_secs(1));
-            }
-        }
-    }
-    if !reachable {
+    if !wait_for_port(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3306)) {
         return Err(
             "timed out waiting for db port 127.0.0.1:3306 to be reachable from the host.".into(),
         );

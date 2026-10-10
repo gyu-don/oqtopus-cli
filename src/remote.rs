@@ -5,15 +5,12 @@
 //! reads, so networks with a private CA or an egress proxy work as they did with curl.
 
 use std::env;
-use std::fs;
 use std::io::Read;
 
 use percent_encoding::percent_decode_str;
 use ureq::http::Uri;
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::{Agent, Proxy, ProxyProtocol};
-
-use crate::test_hooks;
 
 const GITHUB_BASE_URL: &str = "https://github.com";
 
@@ -46,25 +43,9 @@ pub(crate) fn resolve_branch_commit(repository: &str, branch: &str) -> Result<St
 }
 
 pub(crate) fn fetch_url(url: &str) -> Result<Vec<u8>, ()> {
-    // Two test hooks exist because commands differ in how many requests they make. The manifest maps
-    // several URLs to several responses, for commands that resolve a ref and then download an
-    // archive. The single-response hook answers every request with the same bytes, optionally
-    // asserting the URL, which is what a one-request command needs.
-    if let Some(path) = test_hooks::var_os("OQTOPUS_TEST_HTTP_FIXTURE_MANIFEST") {
-        let manifest = fs::read_to_string(path).map_err(|_| ())?;
-        let fixture = manifest.lines().find_map(|line| {
-            let (candidate, fixture) = line.split_once('\t')?;
-            (candidate == url).then_some(fixture)
-        });
-        return fs::read(fixture.ok_or(())?).map_err(|_| ());
-    }
-    if let Some(path) = test_hooks::var_os("OQTOPUS_TEST_HTTP_RESPONSE_FILE") {
-        if let Some(expected) = test_hooks::var("OQTOPUS_TEST_EXPECTED_HTTP_URL")
-            && expected != url
-        {
-            return Err(());
-        }
-        return fs::read(path).map_err(|_| ());
+    #[cfg(feature = "test-hooks")]
+    if let Some(fixture) = crate::test_hooks::http_fixture(url) {
+        return fixture;
     }
     let mut response = agent()?.get(url).call().map_err(|_| ())?;
     let mut body = Vec::new();

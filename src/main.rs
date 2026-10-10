@@ -15,6 +15,7 @@ mod operations;
 mod progress;
 mod remote;
 mod service;
+#[cfg(feature = "test-hooks")]
 mod test_hooks;
 mod text;
 mod version;

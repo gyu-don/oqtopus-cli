@@ -7,7 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::archive::{extract_github_archive, validate_directory_symlinks};
 use crate::remote::fetch_url;
-use crate::test_hooks;
 
 const DEFAULT_TEMPLATE_BRANCH: &str = "main";
 
@@ -286,7 +285,8 @@ fn install_root(template: EnvironmentTemplate) -> Result<PathBuf, String> {
 ///
 /// Snapshots would otherwise differ on every run, so characterization tests pin the value.
 fn created_at() -> Result<String, String> {
-    if let Some(value) = test_hooks::var("OQTOPUS_TEST_CREATED_AT") {
+    #[cfg(feature = "test-hooks")]
+    if let Some(value) = crate::test_hooks::created_at() {
         return Ok(value);
     }
 
