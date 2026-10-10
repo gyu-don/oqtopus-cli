@@ -52,6 +52,12 @@ proxies are supported. `no_proxy` (or `NO_PROXY`) takes a comma-separated list o
 host names; an entry such as `github.com` also matches its subdomains, and `*`
 disables the proxy. IP ranges in CIDR notation are not supported.
 
+If the proxy port is omitted, it defaults to `1080`. Credentials embedded in the
+proxy URL are percent-decoded: `http://user:p%40ss@proxy.example.com:3128` uses
+the password `p@ss`. A literal `+` stays `+`.
+Credentials that decode to URL delimiters such as `/`, `?`, or `#` are currently
+unsupported and cause the request to fail.
+
 ```bash
 export https_proxy=http://proxy.example.com:3128
 oqtopus backend versions

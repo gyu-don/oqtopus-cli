@@ -298,9 +298,11 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 name = "oqtopus-cli"
 version = "2.0.0-beta.1"
 dependencies = [
+ "base64",
  "flate2",
  "insta",
  "libc",
+ "percent-encoding",
  "tar",
  "tempfile",
  "ureq",

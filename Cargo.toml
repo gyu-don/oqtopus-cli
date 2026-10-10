@@ -8,6 +8,7 @@ autotests = false
 [dependencies]
 flate2 = "1"
 libc = "0.2"
+percent-encoding = "2"
 tar = "0.4"
 tempfile = "3"
 # Trust the OS certificate store and support SOCKS proxies, as curl did.
@@ -31,6 +32,7 @@ name = "cli"
 path = "tests/cli.rs"
 
 [dev-dependencies]
+base64 = "0.23"
 insta = "1"
 
 [profile.release]

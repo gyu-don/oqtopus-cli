@@ -7,6 +7,11 @@ on stderr and exit status 1. An empty command word shows help, including after
 `backend`, `cloud-local`, or `manager`. For `backend` and `cloud-local`, an empty
 `start` or `install` target shows command usage and exits with status 1.
 
+GitHub downloads use the HTTPS proxy settings described in
+[Troubleshooting](troubleshooting.md#downloads-fail-behind-a-proxy-or-private-ca).
+A proxy URL without a port defaults to `1080`; embedded credentials are
+percent-decoded before authentication.
+
 ## Top-Level Commands
 
 ```bash

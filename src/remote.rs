@@ -8,6 +8,7 @@ use std::env;
 use std::fs;
 use std::io::Read;
 
+use percent_encoding::percent_decode_str;
 use ureq::http::Uri;
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::{Agent, Proxy, ProxyProtocol};
@@ -113,14 +114,18 @@ fn https_proxy(var: impl Fn(&str) -> Option<String>) -> Result<Option<Proxy>, ()
     let uri = with_scheme.parse::<Uri>().map_err(|_| ())?;
     let protocol = ProxyProtocol::try_from(uri.scheme_str().unwrap_or("http")).map_err(|_| ())?;
     let authority = uri.authority().ok_or(())?;
-    let mut builder = Proxy::builder(protocol).host(authority.host());
-    if let Some(port) = authority.port_u16() {
-        builder = builder.port(port);
-    }
+    // curl defaults every proxy protocol to 1080; ureq defaults HTTP(S) to 80/443.
+    let mut builder = Proxy::builder(protocol)
+        .host(authority.host())
+        .port(authority.port_u16().unwrap_or(1080));
     if let Some((userinfo, _)) = authority.as_str().rsplit_once('@') {
+        // Decode username and password separately as URI userinfo, where a literal '+'
+        // stays '+' rather than becoming a space as it would in form encoding.
         builder = match userinfo.split_once(':') {
-            Some((username, password)) => builder.username(username).password(password),
-            None => builder.username(userinfo),
+            Some((username, password)) => builder
+                .username(&percent_decode_str(username).decode_utf8().map_err(|_| ())?)
+                .password(&percent_decode_str(password).decode_utf8().map_err(|_| ())?),
+            None => builder.username(&percent_decode_str(userinfo).decode_utf8().map_err(|_| ())?),
         };
     }
     // curl trims each entry and treats `example.com` and `.example.com` alike, matching the
@@ -138,7 +143,13 @@ fn https_proxy(var: impl Fn(&str) -> Option<String>) -> Result<Option<Proxy>, ()
         let domain = entry.trim_start_matches('.');
         builder = builder.no_proxy(domain).no_proxy(&format!(".{domain}"));
     }
-    builder.build().map(Some).map_err(|_| ())
+    let proxy = builder.build().map_err(|_| ())?;
+    // ureq rebuilds a URI from the decoded credentials. Refuse credentials that change
+    // its authority (for example an encoded '/') instead of connecting to a different host.
+    if proxy.host() != authority.host() || proxy.port() != authority.port_u16().unwrap_or(1080) {
+        return Err(());
+    }
+    Ok(Some(proxy))
 }
 
 /// Extracts `(sha, reference)` pairs from a git smart-HTTP advertisement.
@@ -193,8 +204,17 @@ fn find_all<'a>(haystack: &'a [u8], needle: &'a [u8]) -> impl Iterator<Item = us
 #[cfg(test)]
 mod tests {
     use super::{https_proxy, parse_remote_refs};
-    use ureq::ProxyProtocol;
+    use base64::Engine;
+    use base64::prelude::BASE64_STANDARD;
+    use std::sync::{Arc, Mutex};
+    use ureq::config::Config;
     use ureq::http::Uri;
+    use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
+    use ureq::unversioned::transport::{
+        Buffers, ConnectProxyConnector, ConnectionDetails, Connector, LazyBuffers, NextTimeout,
+        Transport,
+    };
+    use ureq::{Agent, Error, ProxyProtocol};
 
     fn proxy_for(vars: &[(&str, &str)]) -> Result<Option<ureq::Proxy>, ()> {
         https_proxy(|name| {
@@ -240,7 +260,7 @@ mod tests {
         assert_eq!(proxy.host(), "proxy.example");
         assert_eq!(proxy.port(), 3128);
         assert_eq!(proxy.username(), Some("user"));
-        assert_eq!(proxy.password(), Some("p%40ss"));
+        assert_eq!(proxy.password(), Some("p@ss"));
 
         let socks = proxy_for(&[("ALL_PROXY", "socks5h://gateway:1080")])
             .unwrap()
@@ -249,6 +269,153 @@ mod tests {
         assert_eq!(socks.port(), 1080);
 
         assert!(proxy_for(&[("https_proxy", "ftp://proxy.example")]).is_err());
+    }
+
+    #[test]
+    fn proxy_ports_follow_curl_defaults_and_explicit_settings() {
+        for scheme in [
+            "",
+            "http://",
+            "https://",
+            "socks4://",
+            "socks4a://",
+            "socks5://",
+            "socks5h://",
+        ] {
+            for (suffix, expected) in [("", 1080), (":3128", 3128), (":80", 80), (":443", 443)] {
+                let spec = format!("{scheme}proxy.example{suffix}");
+                for variable in ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"] {
+                    let proxy = proxy_for(&[(variable, &spec)]).unwrap().unwrap();
+                    assert_eq!(proxy.port(), expected, "{variable}={spec}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn connect_authentication_uses_decoded_credentials() {
+        for (userinfo, expected) in [
+            ("user:p%40ss", "user:p@ss"),
+            ("u%40ser:p%25ss", "u@ser:p%ss"),
+            ("user:p%3ass", "user:p:ss"),
+            ("user:p+ss", "user:p+ss"),
+            ("user:p%2540ss", "user:p%40ss"),
+            ("u%40ser", "u@ser:"),
+        ] {
+            let spec = format!("http://{userinfo}@proxy.example:3128");
+            let proxy = proxy_for(&[("https_proxy", &spec)]).unwrap().unwrap();
+            let request = Arc::new(Mutex::new(Vec::new()));
+            let connector = ConnectProxyConnector::default().chain(ProxyFixture(request.clone()));
+            let agent = Agent::with_parts(
+                Agent::config_builder().proxy(Some(proxy)).build(),
+                connector,
+                ProxyFixture(request.clone()),
+            );
+            // A fixed 407 ends the CONNECT exchange before TLS. The real ureq connector
+            // generates the authentication header; neither sockets nor DNS are involved.
+            assert!(matches!(
+                agent.get("https://github.com/").call(),
+                Err(Error::ConnectProxyFailed(_))
+            ));
+            let request = String::from_utf8(request.lock().unwrap().clone()).unwrap();
+            assert!(request.starts_with("CONNECT github.com:443 HTTP/1.1\r\n"));
+            let credentials = request
+                .lines()
+                .find_map(|line| line.strip_prefix("Proxy-Authorization: Basic "))
+                .expect("CONNECT must carry proxy authentication");
+            assert_eq!(
+                BASE64_STANDARD.decode(credentials).unwrap(),
+                expected.as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn proxy_credentials_reject_invalid_utf8() {
+        for userinfo in ["%ff:pass", "user:%ff"] {
+            let spec = format!("http://{userinfo}@proxy.example:3128");
+            assert!(proxy_for(&[("https_proxy", &spec)]).is_err());
+        }
+    }
+
+    #[test]
+    fn decoded_credentials_cannot_change_the_proxy_endpoint() {
+        for userinfo in ["user:p%2fss", "user:p%3fss", "user:p%23ss"] {
+            let spec = format!("http://{userinfo}@proxy.example:3128");
+            assert!(proxy_for(&[("https_proxy", &spec)]).is_err());
+        }
+    }
+
+    /// Supplies the proxy exchange in memory, while ureq constructs the CONNECT request.
+    #[derive(Debug)]
+    struct ProxyFixture(Arc<Mutex<Vec<u8>>>);
+
+    impl Resolver for ProxyFixture {
+        fn resolve(
+            &self,
+            uri: &Uri,
+            _: &Config,
+            _: NextTimeout,
+        ) -> Result<ResolvedSocketAddrs, Error> {
+            let mut addresses = self.empty();
+            addresses.push(([127, 0, 0, 1], uri.port_u16().unwrap_or(443)).into());
+            Ok(addresses)
+        }
+    }
+
+    impl<In: Transport> Connector<In> for ProxyFixture {
+        type Out = Box<dyn Transport>;
+
+        fn connect(
+            &self,
+            details: &ConnectionDetails,
+            chained: Option<In>,
+        ) -> Result<Option<Self::Out>, Error> {
+            if let Some(transport) = chained {
+                return Ok(Some(transport.boxed()));
+            }
+            assert_eq!(details.uri.host(), Some("proxy.example"));
+            assert_eq!(details.uri.port_u16(), Some(3128));
+            Ok(Some(
+                ProxyTransport {
+                    request: self.0.clone(),
+                    buffers: LazyBuffers::new(1024, 1024),
+                }
+                .boxed(),
+            ))
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProxyTransport {
+        request: Arc<Mutex<Vec<u8>>>,
+        buffers: LazyBuffers,
+    }
+
+    impl Transport for ProxyTransport {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.buffers
+        }
+
+        fn transmit_output(&mut self, amount: usize, _: NextTimeout) -> Result<(), Error> {
+            self.request
+                .lock()
+                .unwrap()
+                .extend_from_slice(&self.buffers.output()[..amount]);
+            Ok(())
+        }
+
+        fn await_input(&mut self, _: NextTimeout) -> Result<bool, Error> {
+            let response =
+                b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n";
+            self.buffers.input_append_buf()[..response.len()].copy_from_slice(response);
+            self.buffers.input_appended(response.len());
+            Ok(true)
+        }
+
+        fn is_open(&mut self) -> bool {
+            true
+        }
     }
 
     #[test]
