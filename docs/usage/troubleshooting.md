@@ -55,8 +55,14 @@ disables the proxy. IP ranges in CIDR notation are not supported.
 If the proxy port is omitted, it defaults to `1080`. Credentials embedded in the
 proxy URL are percent-decoded: `http://user:p%40ss@proxy.example.com:3128` uses
 the password `p@ss`. A literal `+` stays `+`.
-Credentials that decode to URL delimiters such as `/`, `?`, or `#` are currently
-unsupported and cause the request to fail.
+
+There is a known limitation in the HTTP library, ureq, when handling proxy
+credentials. Credentials that decode to `/`, `?`, or `#`, spaces, or non-ASCII
+characters cannot currently be used. SOCKS5 and SOCKS5h passwords containing
+`:` also fail. Settings that alter the decoded username or password are rejected
+rather than used with a different proxy address or altered credentials.
+HTTP and HTTPS proxy passwords may
+contain `:`, but HTTP Basic authentication cannot represent `:` in a username.
 
 ```bash
 export https_proxy=http://proxy.example.com:3128

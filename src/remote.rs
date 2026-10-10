@@ -118,16 +118,37 @@ fn https_proxy(var: impl Fn(&str) -> Option<String>) -> Result<Option<Proxy>, ()
     let mut builder = Proxy::builder(protocol)
         .host(authority.host())
         .port(authority.port_u16().unwrap_or(1080));
-    if let Some((userinfo, _)) = authority.as_str().rsplit_once('@') {
-        // Decode username and password separately as URI userinfo, where a literal '+'
-        // stays '+' rather than becoming a space as it would in form encoding.
-        builder = match userinfo.split_once(':') {
-            Some((username, password)) => builder
-                .username(&percent_decode_str(username).decode_utf8().map_err(|_| ())?)
-                .password(&percent_decode_str(password).decode_utf8().map_err(|_| ())?),
-            None => builder.username(&percent_decode_str(userinfo).decode_utf8().map_err(|_| ())?),
-        };
-    }
+    // FIXME(ureq): URL credentials should be decoded by ureq. Its current ProxyBuilder
+    // interpolates credentials into a URI, then its accessors parse them again. Decode
+    // locally and verify the resulting endpoint and authentication below until upstream
+    // can preserve credentials independently of URI syntax.
+    let credentials = if let Some((userinfo, _)) = authority.as_str().rsplit_once('@') {
+        // Split before decoding; a literal '+' stays '+' as required for URI userinfo.
+        let (username, password) = userinfo
+            .split_once(':')
+            .map_or((userinfo, None), |(username, password)| {
+                (username, Some(password))
+            });
+        let username = percent_decode_str(username)
+            .decode_utf8()
+            .map_err(|_| ())?
+            .into_owned();
+        let password = password
+            .map(|password| {
+                percent_decode_str(password)
+                    .decode_utf8()
+                    .map(|value| value.into_owned())
+                    .map_err(|_| ())
+            })
+            .transpose()?;
+        builder = builder.username(&username);
+        if let Some(password) = &password {
+            builder = builder.password(password);
+        }
+        Some((username, password))
+    } else {
+        None
+    };
     // curl trims each entry and treats `example.com` and `.example.com` alike, matching the
     // domain and every subdomain. ureq matches a bare name exactly and a dotted one as a suffix
     // only, so each entry is registered in both forms.
@@ -148,6 +169,31 @@ fn https_proxy(var: impl Fn(&str) -> Option<String>) -> Result<Option<Proxy>, ()
     // its authority (for example an encoded '/') instead of connecting to a different host.
     if proxy.host() != authority.host() || proxy.port() != authority.port_u16().unwrap_or(1080) {
         return Err(());
+    }
+    if let Some((username, password)) = credentials {
+        let matches = match protocol {
+            ProxyProtocol::Http | ProxyProtocol::Https => {
+                // HTTP Basic joins both fields with ':', so a ':' in the password can
+                // still produce correct authentication even when ureq reparses it.
+                // A ':' in the username cannot be represented by HTTP Basic.
+                !username.contains(':')
+                    && format!("{username}:{}", password.as_deref().unwrap_or_default())
+                        == format!(
+                            "{}:{}",
+                            proxy.username().unwrap_or_default(),
+                            proxy.password().unwrap_or_default(),
+                        )
+            }
+            // SOCKS5 transmits these fields separately: recombining them would conceal
+            // a password such as 'p:ss' becoming username 'user:p' and password 'ss'.
+            _ => {
+                proxy.username() == Some(username.as_str())
+                    && proxy.password() == password.as_deref()
+            }
+        };
+        if !matches {
+            return Err(());
+        }
     }
     Ok(Some(proxy))
 }
@@ -340,8 +386,48 @@ mod tests {
 
     #[test]
     fn decoded_credentials_cannot_change_the_proxy_endpoint() {
-        for userinfo in ["user:p%2fss", "user:p%3fss", "user:p%23ss"] {
-            let spec = format!("http://{userinfo}@proxy.example:3128");
+        for scheme in ["http", "https", "socks5", "socks5h"] {
+            for userinfo in [
+                "user:p%2fss",
+                "user:p%3fss",
+                "user:p%23ss",
+                "user:p%20ss",
+                "user:p%C3%A9ss",
+            ] {
+                let spec = format!("{scheme}://{userinfo}@proxy.example:3128");
+                assert!(proxy_for(&[("https_proxy", &spec)]).is_err(), "{spec}");
+            }
+        }
+    }
+
+    #[test]
+    fn socks_credentials_preserve_each_decoded_field() {
+        for scheme in ["socks5", "socks5h"] {
+            for (userinfo, username, password) in [
+                ("u%40ser:p%40ss", "u@ser", Some("p@ss")),
+                ("user:p%25ss", "user", Some("p%ss")),
+                ("user:p%2540ss", "user", Some("p%40ss")),
+                ("user:p+ss", "user", Some("p+ss")),
+                ("u%40ser", "u@ser", None),
+                ("user:", "user", Some("")),
+                ("u%3Aser:pass", "u:ser", Some("pass")),
+            ] {
+                let spec = format!("{scheme}://{userinfo}@proxy.example:3128");
+                let proxy = proxy_for(&[("https_proxy", &spec)]).unwrap().unwrap();
+                assert_eq!(proxy.username(), Some(username));
+                assert_eq!(proxy.password(), password);
+            }
+            for userinfo in ["user:p%3Ass", "user:p:ss", "u%3Aser"] {
+                let spec = format!("{scheme}://{userinfo}@proxy.example:3128");
+                assert!(proxy_for(&[("https_proxy", &spec)]).is_err(), "{spec}");
+            }
+        }
+    }
+
+    #[test]
+    fn basic_auth_rejects_a_colon_in_the_decoded_username() {
+        for scheme in ["http", "https"] {
+            let spec = format!("{scheme}://u%3Aser:pass@proxy.example:3128");
             assert!(proxy_for(&[("https_proxy", &spec)]).is_err());
         }
     }

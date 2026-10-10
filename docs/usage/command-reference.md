@@ -11,6 +11,8 @@ GitHub downloads use the HTTPS proxy settings described in
 [Troubleshooting](troubleshooting.md#downloads-fail-behind-a-proxy-or-private-ca).
 A proxy URL without a port defaults to `1080`; embedded credentials are
 percent-decoded before authentication.
+Credentials affected by the known proxy-library limitation described on that
+page are rejected.
 
 ## Top-Level Commands
 
