@@ -1666,7 +1666,7 @@ sync_cloud_local_component_environment() {
   case "$component" in
     cloud)
       [[ -f "$target_dir/pyproject.toml" ]] || die "cloud $version is missing pyproject.toml."
-      uv sync --frozen --project "$target_dir" || die "failed to synchronize cloud $version with uv."
+      uv sync --frozen --no-dev --project "$target_dir" || die "failed to synchronize cloud $version with uv."
       ;;
     frontend|admin)
       ;;

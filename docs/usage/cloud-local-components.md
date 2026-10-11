@@ -113,17 +113,11 @@ Removes the selected local release directory from the installation root.
 ## How Python Environments Are Managed
 
 Install and update build the cloud environment once with
-`uv sync --frozen --project <target_dir>`. Starting a service or the DB runs
-`uv run --no-sync`, so nothing is installed or changed at start time. If a
-component fails to start because its environment is missing or outdated,
+`uv sync --frozen --no-dev --project <target_dir>`. Starting a service or the
+DB runs `uv run --no-sync`, so nothing is installed or changed at start time.
+If a component fails to start because its environment is missing or outdated,
 uninstall that version and install it again. `install` and `update` reuse an
 existing installation of the same version without synchronizing it again.
-
-Unlike the other components, the cloud environment is synchronized **without**
-`--no-dev`. `oqtopus-cloud-infra` runs Alembic, which is currently in the
-cloud repository's dev dependency group. This is a temporary measure: once
-Alembic moves to the main dependencies, `--no-dev` will be used for cloud as
-well.
 
 ## Configuration Files
 

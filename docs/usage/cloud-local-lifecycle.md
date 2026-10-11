@@ -109,7 +109,9 @@ The stop order is the reverse of the start order:
 5. `worker`
 6. `db`
 
-`db` is stopped via `docker compose down`, which removes the containers.
+`db` is stopped with `oqtopus-cloud-infra stop`, which stops only the database
+and object storage containers. Other containers, the network and the data
+volumes are kept.
 
 ## Stop One Service
 
