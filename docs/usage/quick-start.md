@@ -46,7 +46,7 @@ oqtopus cloud-local status
 Example output:
 
 ```text
-db: Running (my-cloud-db-1, my-cloud-minio-1, my-cloud-mc-1)
+db: Running (db, seaweedfs)
 worker: Running (PID 12345)
 user_signup: Running (PID 12346)
 admin: Running (PID 12347)
