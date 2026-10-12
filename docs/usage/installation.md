@@ -67,6 +67,20 @@ oqtopus backend install engine
 oqtopus backend install all
 ```
 
+!!! warning "SSE jobs require Docker Engine installed directly on Linux"
+    SSE jobs are **not supported with Docker Desktop** (Mac / Windows,
+    including WSL2 integration). Docker Desktop runs Docker inside a VM, so
+    `docker0` does not exist on the host and the SSE container cannot reach
+    `sse_engine`.
+
+    SSE jobs work with **Docker Engine installed directly on Linux**. On
+    Windows, install Docker Engine inside a WSL2 distribution (for example
+    Ubuntu) instead of enabling Docker Desktop's WSL integration.
+
+    Other job types do not use the SSE container. See
+    [SSE Network Settings](./backend-configuration.md#sse-network-settings)
+    for details.
+
 To defer the `sse_runtime` build, use `--skip-sse-build` and build it later:
 
 ```bash

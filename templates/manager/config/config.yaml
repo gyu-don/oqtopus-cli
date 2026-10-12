@@ -9,7 +9,10 @@ server:
 behavior:
   log_tail_lines: 100
   log_buffer_lines: 1000
+  operation_buffer_lines: 1000            # install/update/build output kept server-side for reconnects (unrelated to log_buffer_lines)
   file_edit_lock_timeout_sec: 600
+  oqtopus_cli_read_timeout_sec: 10        # status/info/device-status reads
+  oqtopus_cli_operation_timeout_sec: 600  # install/start/stop/... operations
 
 # Appearance settings: app branding and sidebar links
 appearance:
@@ -21,7 +24,7 @@ appearance:
     - backend
   sidebar_links:
     - label: Documentation
-      url: https://github.com/snuffkin/oqtopus-manager
+      url: https://oqtopus-manager.readthedocs.io/
     - label: OQTOPUS Cloud
       url: https://your-cloud-url/
     - label: OQTOPUS Admin
@@ -33,7 +36,7 @@ appearance:
 
 # Authentication settings
 auth:
-  provider: none  # "none" disables auth | "header" reads JWT from a proxy-injected header
+  provider: none  # "none" disables auth | "header" reads JWT from a proxy-injected header | "oidc" verifies a Bearer token
 
   # Active when provider: none
   none:
@@ -54,6 +57,33 @@ auth:
       # jwks_url: https://your-jwks-url/    # omit to derive from issuer automatically
       audience: your-audience               # e.g. Cognito App client ID
     # signout_url: https://your-signout-url/  # when set, adds a "Sign out" link to the sidebar
+
+  # Active when provider: oidc
+  oidc:
+    issuer: https://your-issuer-url/        # expected iss; JWKS is discovered from it
+    # jwks_url: https://your-jwks-url/      # explicit JWKS endpoint; skips discovery
+    audience: your-audience                 # expected aud; or set client_id (Cognito access tokens)
+    # client_id: your-client-id
+    # token_use: access                     # require token_use claim (Cognito)
+    algorithms: [RS256]                     # asymmetric algorithms only
+    required_scope: oqtopus-manager/access  # omit to disable the scope check
+    principal_claim: email                  # "sub" (default) | "email" | "azp" for M2M callers
+    roles_claim: "cognito:groups"           # optional; without roles, permission-protected endpoints are denied
+
+  # Routes that skip authentication entirely, regardless of provider.
+  public_paths:
+    - method: GET
+      path: /health
+    - method: GET
+      path: /app-icon
+    - method: GET
+      path: /favicon.ico
+
+  # Synthetic identity assigned to requests bypassed via public_paths.
+  # Omit entirely to leave request.state.user as None for those requests.
+  public_identity:
+    default_account: public
+    default_roles: []
 
   # raw roles_claim value → display name; unmapped values pass through as-is
   role_mappings:
@@ -82,8 +112,9 @@ permissions:
     - environment.config.get
     - environment.config.update
     - environment.log.get
-    - environment.service.manage
+    - environment.service.control
     - environment.component.manage
+    - environment.locks.manage
     - app_settings.get
   admin:
     - app_settings.update
